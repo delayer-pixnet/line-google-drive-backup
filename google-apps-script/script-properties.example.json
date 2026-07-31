@@ -1,0 +1,15 @@
+{
+  "GOOGLE_OAUTH_CLIENT_ID": "replace-with-google-oauth-client-id",
+  "GOOGLE_OAUTH_CLIENT_SECRET": "replace-with-google-oauth-client-secret",
+  "LINE_CHANNEL_ACCESS_TOKEN": "replace-with-line-channel-access-token",
+  "WORKER_GAS_SHARED_SECRET": "replace-with-at-least-32-random-bytes",
+  "BIND_TOKEN_SECRET": "replace-with-a-different-at-least-32-random-bytes",
+  "IDENTIFIER_HASH_SECRET": "replace-with-a-third-independent-at-least-32-random-bytes",
+  "ADMIN_SPREADSHEET_ID": "replace-with-admin-spreadsheet-id",
+  "MAX_FILE_SIZE_BYTES": "20971520",
+  "APP_BASE_URL": "https://script.google.com/macros/s/replace-with-deployment-id/exec",
+  "DELETE_DRIVE_ON_UNSEND": "false",
+  "ERROR_RETENTION_DAYS": "30",
+  "COMPLETED_JOB_RETENTION_DAYS": "90",
+  "JOB_PROCESSING_LEASE_SECONDS": "600"
+}

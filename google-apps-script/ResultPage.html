@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.7; color: #1f2937; }
+      .result { padding: 1rem; border-radius: .5rem; background: <?= success ? '#dcfce7' : '#fee2e2' ?>; }
+    </style>
+  </head>
+  <body>
+    <h1><?= success ? '處理完成' : '處理未完成' ?></h1>
+    <p class="result"><?= message ?></p>
+    <p>你現在可以關閉此頁並回到 LINE。</p>
+  </body>
+</html>

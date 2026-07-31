@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.7; color: #1f2937; }
+      a { display: inline-block; padding: .8rem 1.2rem; color: #fff; background: #166534; border-radius: .5rem; text-decoration: none; }
+      .notice { padding: 1rem; background: #f3f4f6; border-radius: .5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>綁定自己的 Google Drive</h1>
+    <p class="notice">請確認網址為 Google Apps Script 網域。授權後，附件與備份試算表只會建立在你選擇的 Google 帳號。</p>
+    <p>Google 將要求 openid、email、profile 與 drive.file 權限。drive.file 只允許本 Bot 存取自己建立或由你選取的檔案。</p>
+    <p><a href="<?= authorizationUrl ?>">前往 Google 授權</a></p>
+    <p>此連結為短效，期限內重新整理此頁不會失效；Google 授權完成後即不可重複使用。請勿轉傳。</p>
+  </body>
+</html>

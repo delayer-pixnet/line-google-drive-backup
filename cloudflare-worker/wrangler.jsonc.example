@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // LINE_CHANNEL_SECRET、LINE_CHANNEL_ACCESS_TOKEN、GAS_ENDPOINT_URL、
+  // WORKER_GAS_SHARED_SECRET、BIND_TOKEN_SECRET 與 IDENTIFIER_HASH_SECRET
+  // 必須以 `wrangler secret put` 設定，不可放入 vars 或提交至 Git。
+  "name": "line-google-drive-backup",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "workers_dev": true,
+  "vars": {
+    "MAX_FILE_SIZE_BYTES": "20971520",
+    "BIND_TOKEN_TTL_SECONDS": "600",
+    "GAS_REQUEST_TIMEOUT_MS": "55000",
+    "ENABLE_PUSH_FALLBACK": "false"
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "BACKUP_QUEUE",
+        "queue": "line-google-drive-backup"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "line-google-drive-backup",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "line-google-drive-backup-dlq"
+      }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
+}

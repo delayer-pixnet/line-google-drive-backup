@@ -1,0 +1,26 @@
+# Cloudflare Worker
+cloudflare-worker/node_modules/
+cloudflare-worker/dist/
+cloudflare-worker/.wrangler/
+cloudflare-worker/coverage/
+cloudflare-worker/.dev.vars
+cloudflare-worker/wrangler.jsonc
+
+# Google Apps Script／clasp 本機檔案
+google-apps-script/.clasp.json
+google-apps-script/.clasprc.json
+
+# Secret 與本機設定
+.env
+.env.*
+!.env.example
+*.local
+*.secret
+secrets/
+
+# 編輯器與作業系統
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

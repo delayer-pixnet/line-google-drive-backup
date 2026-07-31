@@ -1,0 +1,7 @@
+# 只供本機 wrangler dev 使用；複製為 .dev.vars 後填入測試值，請勿提交。
+LINE_CHANNEL_SECRET="replace-with-test-channel-secret"
+LINE_CHANNEL_ACCESS_TOKEN="replace-with-test-channel-access-token"
+GAS_ENDPOINT_URL="https://script.google.com/macros/s/replace-with-deployment-id/exec"
+WORKER_GAS_SHARED_SECRET="replace-with-at-least-32-random-bytes"
+BIND_TOKEN_SECRET="replace-with-a-different-at-least-32-random-bytes"
+IDENTIFIER_HASH_SECRET="replace-with-a-stable-different-at-least-32-random-bytes"
