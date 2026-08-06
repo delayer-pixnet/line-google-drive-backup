@@ -52,7 +52,7 @@ npx wrangler queues create line-google-drive-backup-dlq
 
 ## 5. 非 Secret vars
 
-`wrangler.jsonc` 的 `vars` 共 4 項：
+`wrangler.jsonc` 的 `vars` 共 5 項：
 
 | 名稱 | 範例 | 說明與錯誤現象 |
 |---|---:|---|
@@ -60,6 +60,7 @@ npx wrangler queues create line-google-drive-backup-dlq
 | `BIND_TOKEN_TTL_SECONDS` | `600` | 綁定連結秒數，允許 1 至 3600；錯誤時用 600 |
 | `GAS_REQUEST_TIMEOUT_MS` | `55000` | Worker 等 GAS 毫秒數，最大 60000。timeout 不表示 GAS 已停止；重送遇有效租約時會依 GAS 回傳延後，不可 ACK |
 | `ENABLE_PUSH_FALLBACK` | `false` | 預設不補送。設為 `true` 時，只在 LINE 明確回覆 Reply Token 過期或無效、GAS 有回覆文字且有收件者時嘗試 Push；Push 可能計入 LINE 官方帳號訊息用量 |
+| `HMAC_DIAGNOSTIC_ENABLED` | `false` | 僅供一次性 `SIGNATURE_INVALID` 診斷；暫時與 GAS 同步設為 `true`，完成比對後立即改回 `false`，不會改變正式 HMAC 規則 |
 
 三組 HMAC 金鑰必須分開保存：`IDENTIFIER_HASH_SECRET` 不得與 `BIND_TOKEN_SECRET` 或 `WORKER_GAS_SHARED_SECRET` 共用。`BIND_TOKEN_SECRET` 可按事件應變程序輪替，但會使尚未使用的舊 Bind Token 失效；系統已有正式資料後不可直接輪替 `IDENTIFIER_HASH_SECRET`，否則既有使用者、群組、邀請、OAuth Service 與 Drive 冪等鍵將無法對應。
 
@@ -77,3 +78,4 @@ Dashboard 的 Queue Consumers 應只看到這個 Worker。若部署說已有其�
 - 範例 consumer 的 `max_retries` 維持 `5`，並設定 `line-google-drive-backup-dlq`。主 Queue 超過最大重試次數後，訊息會進 DLQ；先依 errorCode 修正設定，再用 Dashboard 小量重送，不要在未修正前全部重送。
 - GAS 回 `JOB_IN_PROGRESS` 時，Worker 依 `retryAfterSeconds`（30 至 900 秒）呼叫 Queue retry，不 ACK。無效或缺少延遲時使用 60 秒；預設 600 秒租約會依當時剩餘時間加 5 秒，最高約 605 秒。
 - 所有指令都先進 Queue，Reply Token 可能在 GAS 完成前過期。若 `ENABLE_PUSH_FALLBACK=false`，失效只留下安全錯誤；若開啟 fallback，只有 LINE 明確判定 Token 無效才嘗試 Push。Reply 或 Push 失敗都不會重做已完成的備份，一般成功附件也不會主動 Push。
+- 若遇到 GAS `SIGNATURE_INVALID`，只有在兩端同時暫時啟用 `HMAC_DIAGNOSTIC_ENABLED` 時才會記錄短指紋；比對 Worker／GAS 指紋後立即關閉開關並重新部署。不得把診斷 Log 貼到公開場所。

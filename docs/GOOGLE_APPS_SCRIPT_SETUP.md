@@ -33,8 +33,13 @@
 | `ERROR_RETENTION_DAYS` | 正整數天數，預設 `30`，允許 1 至 3650 | 否 | 範例可、正式設定不提交 | 未設定時用 30 天；格式無效時清理函式拒絕執行 |
 | `COMPLETED_JOB_RETENTION_DAYS` | 正整數天數，預設 `90`，允許 1 至 3650 | 否 | 範例可、正式設定不提交 | 未設定時用 90 天；格式無效時清理函式拒絕執行 |
 | `JOB_PROCESSING_LEASE_SECONDS` | 正整數秒數，預設 `600`，允許 60 至 3600 | 否 | 範例可、正式設定不提交 | 未設定時用 600 秒；過短會造成尚在處理的工作被重取，格式無效時拒絕處理 |
+| `HMAC_DIAGNOSTIC_ENABLED` | `false`；只在定位 `SIGNATURE_INVALID` 時與 Worker 暫時同步設為 `true` | 否 | 範例可、正式設定不提交 | 未設定或非 `true` 時不輸出任何診斷指紋；完成比對後應立即改回 `false` |
 
-`script-properties.example.json` 列出 13 個完整範例名稱，可用來逐項核對，但不可直接填入真實值後提交。`WORKER_GAS_SHARED_SECRET`、`BIND_TOKEN_SECRET` 與 `IDENTIFIER_HASH_SECRET` 必須三者不同。可用密碼管理器產生高熵值；不要把產生指令輸出貼入文件或終端紀錄截圖。
+`script-properties.example.json` 列出完整範例名稱，可用來逐項核對，但不可直接填入真實值後提交。`WORKER_GAS_SHARED_SECRET`、`BIND_TOKEN_SECRET` 與 `IDENTIFIER_HASH_SECRET` 必須三者不同。可用密碼管理器產生高熵值；不要把產生指令輸出貼入文件或終端紀錄截圖。
+
+### 一次性 HMAC 診斷
+
+若 GAS 回覆 `SIGNATURE_INVALID`，先確認 Worker 與 GAS 的 `WORKER_GAS_SHARED_SECRET` 完全相同，再只在短時間內將兩端 `HMAC_DIAGNOSTIC_ENABLED` 設為 `true`。診斷輸出只含固定長度的 HMAC／SHA-256 指紋、Signature 前綴與 Script ID 尾碼，不含原始 Secret、payload、nonce、Token 或 URL。完成一次受控測試後，立即將 GAS Property 改回 `false`；不要把診斷輸出公開或長期啟用。
 
 `IDENTIFIER_HASH_SECRET` 是永久資料關聯的一部分。首次正式上線後不可直接更換；它同時影響 Users、Groups、Invitations、Nonces、BindingSessions、OAuth Service 名稱與 Drive `lineBackupEventKey`。若日後確實需要輪替，必須另行設計資料與 Token 遷移，不能只替換 Property。
 

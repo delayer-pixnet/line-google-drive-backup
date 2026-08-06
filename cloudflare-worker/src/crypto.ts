@@ -67,6 +67,22 @@ export async function hmacSha256Hex(secret: string, message: string): Promise<st
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export async function computeWorkerEnvelopeSignature(
+  timestamp: string | number,
+  nonce: string,
+  payload: string,
+  secret: string,
+): Promise<string> {
+  const signingInput = `${String(timestamp)}.${nonce}.${payload}`;
+  return hmacSha256Hex(secret, signingInput);
+}
+
+export async function sha256Hex(message: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(message));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export function constantTimeEqual(left: string, right: string): boolean {
   const leftBytes = encoder.encode(left);
   const rightBytes = encoder.encode(right);

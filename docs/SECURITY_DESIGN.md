@@ -54,6 +54,10 @@ Worker 與 GAS 都以不因第一個不相符字元而提前返回的比較函�
 
 Worker Log 只允許 `component`、`status`、`correlationId` 與 `errorCode`。GAS Log／Errors 工作表只保存元件、錯誤碼、安全訊息與關聯 ID。`doPost` 在 Worker envelope 完整驗證成功前，只能寫不含輸入內容的安全 Console Log；無效 JSON、HMAC、timestamp 或 nonce 不得寫入管理試算表。任何除錯不得臨時輸出 payload、signature、nonce、Token、Request header、Script Properties、OAuth Service storage、原始識別碼、訊息文字或完整 webhook payload。
 
+### 一次性 HMAC 診斷模式
+
+`HMAC_DIAGNOSTIC_ENABLED` 在 Worker 與 GAS 預設為 `false`。只有為定位 `SIGNATURE_INVALID` 而進行的一次性測試才暫時設為 `true`，完成比對後應立即在兩端改回 `false` 並重新部署／更新 Web App。診斷只使用固定公開字串 `line-backup-hmac-diagnostic-v1` 計算 HMAC-SHA256 指紋，並輸出前 16 個小寫十六進位字元；完整 signing input 只輸出 SHA-256 前 16 碼，Signature 只輸出前 16 碼，Script ID 只輸出最後 8 碼。診斷 Log 不包含 Secret、payload、nonce、原始識別碼、完整 Signature、GAS URL 或 Token。診斷關閉時不會產生任何指紋欄位。
+
 ## 重試、去重與資料清理
 
 - Jobs 使用 webhookEventId 去重。檔案上傳成功後會先保存 `DriveFileId`；即使後續 Sheet 寫入失敗，FAILED 狀態仍保留該 ID，下一次 Queue 重試會沿用既有檔案，不重新上傳。

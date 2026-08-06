@@ -53,6 +53,18 @@ export interface Env {
   readonly BIND_TOKEN_TTL_SECONDS?: string;
   readonly GAS_REQUEST_TIMEOUT_MS?: string;
   readonly ENABLE_PUSH_FALLBACK?: string;
+  readonly HMAC_DIAGNOSTIC_ENABLED?: string;
+}
+
+export interface HmacDiagnostic {
+  readonly workerSecretFingerprint?: string;
+  readonly workerSigningInputFingerprint?: string;
+  readonly workerSignaturePrefix?: string;
+  readonly gasSecretFingerprint?: string;
+  readonly gasSigningInputFingerprint?: string;
+  readonly gasExpectedSignaturePrefix?: string;
+  readonly gasProvidedSignaturePrefix?: string;
+  readonly gasScriptIdSuffix?: string;
 }
 
 export interface GasResult {
@@ -61,4 +73,6 @@ export interface GasResult {
   readonly retryable?: boolean;
   readonly errorCode?: string;
   readonly retryAfterSeconds?: number;
+  readonly diagnostic?: HmacDiagnostic;
+  readonly workerDiagnostic?: HmacDiagnostic;
 }

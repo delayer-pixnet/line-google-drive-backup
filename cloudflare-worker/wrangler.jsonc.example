@@ -11,7 +11,8 @@
     "MAX_FILE_SIZE_BYTES": "20971520",
     "BIND_TOKEN_TTL_SECONDS": "600",
     "GAS_REQUEST_TIMEOUT_MS": "55000",
-    "ENABLE_PUSH_FALLBACK": "false"
+    "ENABLE_PUSH_FALLBACK": "false",
+    "HMAC_DIAGNOSTIC_ENABLED": "false"
   },
   "queues": {
     "producers": [

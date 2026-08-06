@@ -6,13 +6,12 @@ function assertTest_(condition, message) {
 
 function testHmacVerification() {
   ensureAdminSheets_();
+  testEnvelopeHmacFixedVector();
   var timestamp = Date.now();
   var nonce = Utilities.getUuid().replace(/-/g, '').toLowerCase();
   var payload = JSON.stringify({ test: true });
-  var signature = hmacHex_(
-    getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET),
-    timestamp + '.' + nonce + '.' + payload
-  );
+  var sharedSecret = getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET);
+  var signature = computeWorkerEnvelopeSignature_(timestamp, nonce, payload, sharedSecret);
   var verifiedPayload = verifyWorkerEnvelope_({
     timestamp: timestamp,
     nonce: nonce,
@@ -20,8 +19,81 @@ function testHmacVerification() {
     signature: signature
   });
   assertTest_(verifiedPayload === payload, '合法 HMAC 應通過驗證。');
-  assertTest_(!constantTimeEqual_(signature, signature.slice(0, -1) + '0'), '竄改簽章應失敗。');
+
+  // 使用尚未消耗的新 timestamp 與 nonce，避免驗證流程受到前一個 Nonce 影響。
+  var tamperedTimestamp = timestamp + 1;
+  var tamperedNonce = Utilities.getUuid().replace(/-/g, '').toLowerCase();
+  var expectedTamperedSignature = computeWorkerEnvelopeSignature_(
+    tamperedTimestamp,
+    tamperedNonce,
+    payload,
+    sharedSecret
+  );
+  var lastCharacter = expectedTamperedSignature.slice(-1);
+  var replacementCharacter = lastCharacter === '0' ? '1' : '0';
+  var tamperedSignature = expectedTamperedSignature.slice(0, -1) + replacementCharacter;
+  assertTest_(!constantTimeEqual_(tamperedSignature, expectedTamperedSignature), '竄改簽章應失敗。');
+
+  var tamperedErrorCode = '';
+  try {
+    verifyWorkerEnvelope_({
+      timestamp: tamperedTimestamp,
+      nonce: tamperedNonce,
+      payload: payload,
+      signature: tamperedSignature
+    });
+  } catch (error) {
+    tamperedErrorCode = error && error.appCode;
+  }
+  assertTest_(tamperedErrorCode === 'SIGNATURE_INVALID', '竄改簽章應拋出 SIGNATURE_INVALID。');
+
+  var payloadTamperTimestamp = timestamp + 2;
+  var payloadTamperNonce = Utilities.getUuid().replace(/-/g, '').toLowerCase();
+  var payloadTamperSignature = computeWorkerEnvelopeSignature_(
+    payloadTamperTimestamp,
+    payloadTamperNonce,
+    payload,
+    sharedSecret
+  );
+  var payloadTamperErrorCode = '';
+  try {
+    verifyWorkerEnvelope_({
+      timestamp: payloadTamperTimestamp,
+      nonce: payloadTamperNonce,
+      payload: payload + ' ',
+      signature: payloadTamperSignature
+    });
+  } catch (error) {
+    payloadTamperErrorCode = error && error.appCode;
+  }
+  assertTest_(payloadTamperErrorCode === 'SIGNATURE_INVALID', '竄改 Payload 應拋出 SIGNATURE_INVALID。');
   console.log('HMAC 驗證測試通過。');
+}
+
+function testEnvelopeHmacFixedVector() {
+  var timestamp = '2026-08-06T12:30:00.000Z';
+  var nonce = '0123456789abcdef0123456789abcdef';
+  // 固定字串常值，避免 JSON.stringify 改變欄位順序或 escaping。
+  var payload = '{"message":"繁體中文測試","ok":true}';
+  var expectedSignature =
+    '5f3da90b2c65bf73c265fc32e667555e179dd65d9b3d3667c7b7c64ed8d6a9ca';
+  var signature = computeWorkerEnvelopeSignature_(
+    timestamp,
+    nonce,
+    payload,
+    'TEST_SECRET_1234567890'
+  );
+  assertTest_(
+    signature === expectedSignature,
+    'Worker 與 GAS Envelope HMAC 固定向量不一致。'
+  );
+  console.log('Envelope HMAC UTF-8 固定向量測試通過。');
+}
+
+function enableHmacDiagnosticMode() {
+  PropertiesService.getScriptProperties()
+    .setProperty(APP_CONFIG_KEYS_.HMAC_DIAGNOSTIC_ENABLED, 'true');
+  return { enabled: true };
 }
 
 function testIdentifierHashSecretSeparation() {

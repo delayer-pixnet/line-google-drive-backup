@@ -40,4 +40,6 @@
 
 ## 安全地收集診斷資料
 
+遇到 GAS `SIGNATURE_INVALID` 時，先確認兩端 `WORKER_GAS_SHARED_SECRET` 完全相同。若仍無法判斷，才在 Worker 與 GAS 同時暫時設定 `HMAC_DIAGNOSTIC_ENABLED=true`，執行一次受控的「說明」測試。安全 Log 只會出現固定長度的 Secret／signing input／Signature 指紋與 Script ID 尾碼，不會出現 Secret、payload、nonce、Token、GAS URL、LINE userId 或完整 Signature。完成比對後，立即將 GAS Property 與 Worker var 改回 `false` 並重新更新／部署；不要長期啟用，也不要把 Log 公開。
+
 可以提供：時間（Asia/Taipei）、元件、errorCode、截短的 correlationId、HTTP 狀態與是否可重現。不要提供：Authorization header、Channel Secret、Access／Refresh Token、OAuth Client Secret、完整 Apps Script／Worker URL、原始 LINE userId／groupId、邀請碼、訊息內容或附件。

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createBindToken,
+  computeWorkerEnvelopeSignature,
   hmacSha256Base64,
   hmacSha256Hex,
   verifyBindToken,
@@ -22,6 +23,17 @@ describe("HMAC", () => {
       hmacSha256Hex("永久識別金鑰-測試", "LINE使用者-U繁體中文"),
     ).resolves.toBe(
       "7ec777e9164c89d93d0f6e67e2c22f76a1750cd75ee3b76611163dba8cd67cb6",
+    );
+  });
+
+  it("Envelope HMAC 與 GAS 共用含繁體中文 Payload 的固定向量", async () => {
+    const secret = "TEST_SECRET_1234567890";
+    const timestamp = "2026-08-06T12:30:00.000Z";
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const payload = "{\"message\":\"繁體中文測試\",\"ok\":true}";
+
+    await expect(computeWorkerEnvelopeSignature(timestamp, nonce, payload, secret)).resolves.toBe(
+      "5f3da90b2c65bf73c265fc32e667555e179dd65d9b3d3667c7b7c64ed8d6a9ca",
     );
   });
 });

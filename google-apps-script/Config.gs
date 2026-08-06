@@ -12,8 +12,14 @@ var APP_CONFIG_KEYS_ = Object.freeze({
   DELETE_DRIVE_ON_UNSEND: 'DELETE_DRIVE_ON_UNSEND',
   ERROR_RETENTION_DAYS: 'ERROR_RETENTION_DAYS',
   COMPLETED_JOB_RETENTION_DAYS: 'COMPLETED_JOB_RETENTION_DAYS',
-  JOB_PROCESSING_LEASE_SECONDS: 'JOB_PROCESSING_LEASE_SECONDS'
+  JOB_PROCESSING_LEASE_SECONDS: 'JOB_PROCESSING_LEASE_SECONDS',
+  HMAC_DIAGNOSTIC_ENABLED: 'HMAC_DIAGNOSTIC_ENABLED'
 });
+
+function isHmacDiagnosticEnabled_() {
+  return PropertiesService.getScriptProperties()
+    .getProperty(APP_CONFIG_KEYS_.HMAC_DIAGNOSTIC_ENABLED) === 'true';
+}
 
 function getRequiredProperty_(name) {
   var value = PropertiesService.getScriptProperties().getProperty(name);

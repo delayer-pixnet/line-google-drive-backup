@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callGas } from "../src/gas-client";
+import { callGas, createGasEnvelope } from "../src/gas-client";
 import type { QueueJob } from "../src/types";
 
 const testJob: QueueJob = {
@@ -52,6 +52,64 @@ describe("GAS client", () => {
     expect(envelope.nonce).toMatch(/^[a-f0-9]{32}$/u);
   });
 
+  it("診斷關閉時不產生 Worker 指紋", async () => {
+    const envelope = await createGasEnvelope(
+      testJob,
+      "shared-secret-for-test",
+      1_735_689_600_000,
+      "0123456789abcdef0123456789abcdef",
+    );
+
+    expect(envelope).not.toHaveProperty("workerDiagnostic");
+  });
+
+  it("診斷開啟時產生固定長度 Worker 指紋", async () => {
+    const envelope = await createGasEnvelope(
+      testJob,
+      "shared-secret-for-test",
+      1_735_689_600_000,
+      "0123456789abcdef0123456789abcdef",
+      true,
+    );
+
+    expect(envelope.workerDiagnostic?.workerSecretFingerprint).toMatch(/^[a-f0-9]{16}$/u);
+    expect(envelope.workerDiagnostic?.workerSigningInputFingerprint).toMatch(/^[a-f0-9]{16}$/u);
+    expect(envelope.workerDiagnostic?.workerSignaturePrefix).toMatch(/^[a-f0-9]{16}$/u);
+  });
+
+  it("只解析安全格式的 GAS 診斷指紋", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      ok: false,
+      retryable: false,
+      errorCode: "SIGNATURE_INVALID",
+      diagnostic: {
+        gasSecretFingerprint: "a".repeat(16),
+        gasSigningInputFingerprint: "b".repeat(16),
+        gasExpectedSignaturePrefix: "c".repeat(16),
+        gasProvidedSignaturePrefix: "d".repeat(16),
+        gasScriptIdSuffix: "Abc123-_",
+        payload: "不得保留",
+      },
+    })));
+
+    const result = await callGas(
+      "https://example.invalid/exec",
+      "shared-secret-for-test",
+      testJob,
+      5000,
+      true,
+    );
+
+    expect(result.diagnostic).toEqual({
+      gasSecretFingerprint: "a".repeat(16),
+      gasSigningInputFingerprint: "b".repeat(16),
+      gasExpectedSignaturePrefix: "c".repeat(16),
+      gasProvidedSignaturePrefix: "d".repeat(16),
+      gasScriptIdSuffix: "Abc123-_",
+    });
+    expect(JSON.stringify(result)).not.toContain("不得保留");
+  });
+
   it.each([30, 605, 900])(
     "接受 30 至 900 秒內的 retryAfterSeconds：%i",
     async (retryAfterSeconds) => {
@@ -82,23 +140,54 @@ describe("GAS client", () => {
     },
   );
 
-  it("將 GAS HTTP 500 標示為可重試", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 500 })));
+  it.each([302, 401, 403, 404, 500])(
+    "保留 GAS HTTP %i 的安全回應欄位",
+    async (status) => {
+      const contentType = status === 500 ? "application/json; charset=utf-8" : "text/html; charset=utf-8";
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+        new Response(status === 500 ? "not-json" : "<html>拒絕</html>", {
+          status,
+          headers: { "content-type": contentType },
+        }),
+      ));
 
-    await expect(callGas("https://example.invalid/exec", "secret", testJob, 5000))
-      .rejects.toMatchObject({
-        errorCode: "GAS_HTTP_ERROR",
-        retryable: true,
-      });
-  });
+      await expect(callGas("https://example.invalid/exec", "secret", testJob, 5000))
+        .rejects.toMatchObject({
+          errorCode: "GAS_HTTP_ERROR",
+          retryable: status >= 500,
+          httpStatus: status,
+          contentType: contentType.split(";", 1)[0],
+          redirected: false,
+        });
+    },
+  );
 
-  it("將 GAS HTTP 400 標示為不可重試", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 400 })));
-
-    await expect(callGas("https://example.invalid/exec", "secret", testJob, 5000))
-      .rejects.toMatchObject({
-        errorCode: "GAS_HTTP_ERROR",
+  it("只解析 JSON HTTP 錯誤的安全錯誤碼與診斷指紋", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
+      {
+        ok: false,
         retryable: false,
+        errorCode: "SIGNATURE_INVALID",
+        diagnostic: {
+          gasSecretFingerprint: "a".repeat(16),
+          gasScriptIdSuffix: "Abc123-_",
+          payload: "不得記錄",
+        },
+        payload: "不得記錄",
+      },
+      { status: 401 },
+    )));
+
+    await expect(callGas("https://example.invalid/exec", "secret", testJob, 5000, true))
+      .rejects.toMatchObject({
+        errorCode: "GAS_HTTP_ERROR",
+        httpStatus: 401,
+        contentType: "application/json",
+        upstreamErrorCode: "SIGNATURE_INVALID",
+        diagnostic: {
+          gasSecretFingerprint: "a".repeat(16),
+          gasScriptIdSuffix: "Abc123-_",
+        },
       });
   });
 
@@ -109,8 +198,11 @@ describe("GAS client", () => {
 
     await expect(callGas("https://example.invalid/exec", "secret", testJob, 5000))
       .rejects.toMatchObject({
-        errorCode: "GAS_INVALID_JSON",
+        errorCode: "GAS_HTTP_ERROR",
         retryable: true,
+        httpStatus: 200,
+        contentType: "text/plain",
+        redirected: false,
       });
   });
 });

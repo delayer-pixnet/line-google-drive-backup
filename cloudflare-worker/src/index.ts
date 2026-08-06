@@ -7,7 +7,7 @@ import {
   replyTextMessage,
 } from "./line-client";
 import { safeLog } from "./logger";
-import type { Env, QueueJob } from "./types";
+import type { Env, HmacDiagnostic, QueueJob } from "./types";
 import { parseBooleanFlag, parsePositiveInteger, requireNonEmpty } from "./validation";
 import { parseWebhookBody } from "./webhook";
 
@@ -91,16 +91,39 @@ export async function processQueueMessage(
       requireNonEmpty(env.WORKER_GAS_SHARED_SECRET, "WORKER_GAS_SHARED_SECRET"),
       message.body,
       parsePositiveInteger(env.GAS_REQUEST_TIMEOUT_MS, 55_000, 60_000),
+      parseBooleanFlag(env.HMAC_DIAGNOSTIC_ENABLED, false),
     );
-    if (!gasResult.ok && gasResult.retryable === true) {
-      safeLog(gasResult.errorCode === "JOB_IN_PROGRESS" ? "info" : "warn", {
-        component: "gas",
-        status: "retrying",
+    const hmacDiagnostic: HmacDiagnostic | undefined =
+      parseBooleanFlag(env.HMAC_DIAGNOSTIC_ENABLED, false) &&
+      (gasResult.workerDiagnostic !== undefined || gasResult.diagnostic !== undefined)
+        ? { ...gasResult.workerDiagnostic, ...gasResult.diagnostic }
+        : undefined;
+    if (!gasResult.ok) {
+      const isRetryable = gasResult.retryable === true;
+      const gasStatus: "retrying" | "rejected" = isRetryable ? "retrying" : "rejected";
+      const gasLogEntry = {
+        component: "gas" as const,
+        status: gasStatus,
         correlationId,
-        errorCode: gasResult.errorCode ?? "GAS_RETRYABLE",
+        errorCode: gasResult.errorCode ?? "GAS_REJECTED",
+      };
+      safeLog(
+        isRetryable && gasResult.errorCode === "JOB_IN_PROGRESS" ? "info" : "warn",
+        hmacDiagnostic === undefined
+          ? gasLogEntry
+          : { ...gasLogEntry, diagnostic: hmacDiagnostic },
+      );
+      if (isRetryable) {
+        message.retry({ delaySeconds: gasResult.retryAfterSeconds ?? 60 });
+        return;
+      }
+    } else if (hmacDiagnostic !== undefined) {
+      safeLog("info", {
+        component: "gas",
+        status: "diagnostic",
+        correlationId,
+        diagnostic: hmacDiagnostic,
       });
-      message.retry({ delaySeconds: gasResult.retryAfterSeconds ?? 60 });
-      return;
     }
     if (
       gasResult.replyMessage !== undefined &&
@@ -156,9 +179,24 @@ export async function processQueueMessage(
       }
     }
     message.ack();
-    safeLog("info", { component: "queue", status: "completed", correlationId });
+    safeLog("info", { component: "queue", status: "acknowledged", correlationId });
   } catch (error: unknown) {
     const externalError = error instanceof ExternalApiError ? error : null;
+    if (externalError?.errorCode === "GAS_HTTP_ERROR") {
+      safeLog(externalError.retryable ? "warn" : "error", {
+        component: "gas",
+        status: "http_error",
+        correlationId,
+        errorCode: "GAS_HTTP_ERROR",
+        ...(externalError.httpStatus === undefined ? {} : { httpStatus: externalError.httpStatus }),
+        ...(externalError.contentType === undefined ? {} : { contentType: externalError.contentType }),
+        ...(externalError.redirected === undefined ? {} : { redirected: externalError.redirected }),
+        ...(externalError.upstreamErrorCode === undefined
+          ? {}
+          : { upstreamErrorCode: externalError.upstreamErrorCode }),
+        ...(externalError.diagnostic === undefined ? {} : { diagnostic: externalError.diagnostic }),
+      });
+    }
     safeLog(externalError?.retryable === true ? "warn" : "error", {
       component: "queue",
       status: externalError?.retryable === true ? "retrying" : "failed",

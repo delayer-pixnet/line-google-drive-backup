@@ -20,6 +20,7 @@ function doGet(request) {
 
 function doPost(request) {
   var job = null;
+  var envelope = null;
   var claimed = false;
   var envelopeVerified = false;
   try {
@@ -27,7 +28,7 @@ function doPost(request) {
     if (typeof rawBody !== 'string' || rawBody.length === 0 || rawBody.length > 120000) {
       throw createAppError_('REQUEST_BODY_INVALID', false, '請求內容不正確。');
     }
-    var envelope = JSON.parse(rawBody);
+    envelope = JSON.parse(rawBody);
     var payload = verifyWorkerEnvelope_(envelope);
     envelopeVerified = true;
     job = validateQueueJob_(JSON.parse(payload));
@@ -73,12 +74,24 @@ function doPost(request) {
         }
       }
     }
-    return jsonOutput_({
+    var response = {
       ok: false,
       retryable: appError.retryable === true,
       errorCode: appError.appCode,
       replyMessage: appError.retryable === true ? undefined : appError.safeMessage
-    });
+    };
+    if (
+      isHmacDiagnosticEnabled_() &&
+      appError.appCode === 'SIGNATURE_INVALID' &&
+      envelope
+    ) {
+      try {
+        response.diagnostic = buildHmacDiagnostic_(envelope);
+      } catch (diagnosticError) {
+        safeLog_('warn', 'gas-diagnostic', 'DIAGNOSTIC_BUILD_FAILED', correlationId);
+      }
+    }
+    return jsonOutput_(response);
   }
 }
 

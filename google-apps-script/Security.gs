@@ -17,8 +17,63 @@ function bytesToHex_(bytes) {
   }).join('');
 }
 
+function computeHmacSha256Hex_(message, secret) {
+  // Apps Script API 參數順序固定為 message、secret；兩端都以 UTF-8 HMAC-SHA256 計算。
+  return bytesToHex_(Utilities.computeHmacSha256Signature(
+    String(message),
+    String(secret),
+    Utilities.Charset.UTF_8
+  ));
+}
+
 function hmacHex_(secret, message) {
-  return bytesToHex_(Utilities.computeHmacSha256Signature(message, secret));
+  return computeHmacSha256Hex_(message, secret);
+}
+
+function computeWorkerEnvelopeSignature_(timestamp, nonce, payload, secret) {
+  var signingInput = String(timestamp) + '.' + String(nonce) + '.' + String(payload);
+  return computeHmacSha256Hex_(signingInput, secret);
+}
+
+var HMAC_DIAGNOSTIC_PUBLIC_KEY_ = 'line-backup-hmac-diagnostic-v1';
+
+function sha256Hex_(message) {
+  return bytesToHex_(Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(message),
+    Utilities.Charset.UTF_8
+  ));
+}
+
+function hmacDiagnosticFingerprint_(value) {
+  return hmacHex_(HMAC_DIAGNOSTIC_PUBLIC_KEY_, String(value)).slice(0, 16);
+}
+
+function hmacDiagnosticSignaturePrefix_(value) {
+  var text = typeof value === 'string' ? value.toLowerCase() : '';
+  return /^[a-f0-9]{16,}$/.test(text)
+    ? text.slice(0, 16)
+    : hmacDiagnosticFingerprint_(text);
+}
+
+function buildHmacDiagnostic_(envelope) {
+  var signingInput = String(envelope.timestamp) + '.' +
+    String(envelope.nonce) + '.' + String(envelope.payload);
+  var expectedSignature = computeWorkerEnvelopeSignature_(
+    envelope.timestamp,
+    envelope.nonce,
+    envelope.payload,
+    getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET)
+  );
+  return {
+    gasSecretFingerprint: hmacDiagnosticFingerprint_(
+      getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET)
+    ),
+    gasSigningInputFingerprint: sha256Hex_(signingInput).slice(0, 16),
+    gasExpectedSignaturePrefix: expectedSignature.slice(0, 16),
+    gasProvidedSignaturePrefix: hmacDiagnosticSignaturePrefix_(envelope.signature),
+    gasScriptIdSuffix: String(ScriptApp.getScriptId()).slice(-8)
+  };
 }
 
 function constantTimeEqual_(left, right) {
@@ -63,9 +118,11 @@ function verifyWorkerEnvelope_(envelope) {
   if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature)) {
     throw createAppError_('SIGNATURE_INVALID', false, '請求驗證失敗。');
   }
-  var expected = hmacHex_(
-    getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET),
-    timestamp + '.' + nonce + '.' + payload
+  var expected = computeWorkerEnvelopeSignature_(
+    timestamp,
+    nonce,
+    payload,
+    getRequiredProperty_(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET)
   );
   if (!constantTimeEqual_(expected, signature)) {
     throw createAppError_('SIGNATURE_INVALID', false, '請求驗證失敗。');

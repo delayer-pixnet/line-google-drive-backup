@@ -7,6 +7,9 @@ const sensitiveValues = {
   messageId: "msg-sensitive-001",
   replyToken: "reply-token-sensitive",
   rawText: "不可出現在 Log 的原始文字",
+  gasUrl: "https://example.invalid/exec",
+  signature: "signature-sensitive",
+  nonce: "nonce-sensitive",
   sharedSecret: "gas-shared-secret-sensitive",
   lineToken: "line-access-token-sensitive",
   identifierSecret: "identifier-hash-secret-sensitive",
@@ -31,16 +34,17 @@ const queueJob: QueueJob = {
   bindToken: null,
 };
 
-function createEnv(enablePushFallback = false): Env {
+function createEnv(enablePushFallback = false, diagnosticEnabled = false): Env {
   return {
     BACKUP_QUEUE: {} as Queue<QueueJob>,
     LINE_CHANNEL_SECRET: "line-signature-secret",
     LINE_CHANNEL_ACCESS_TOKEN: sensitiveValues.lineToken,
-    GAS_ENDPOINT_URL: "https://example.invalid/exec",
+    GAS_ENDPOINT_URL: sensitiveValues.gasUrl,
     WORKER_GAS_SHARED_SECRET: sensitiveValues.sharedSecret,
     BIND_TOKEN_SECRET: "bind-token-secret-sensitive",
     IDENTIFIER_HASH_SECRET: sensitiveValues.identifierSecret,
     ENABLE_PUSH_FALLBACK: String(enablePushFallback),
+    HMAC_DIAGNOSTIC_ENABLED: String(diagnosticEnabled),
   };
 }
 
@@ -87,6 +91,61 @@ describe("Queue consumer", () => {
 
     expect(current.retry).toHaveBeenCalledWith({ delaySeconds: 60 });
     expect(current.ack).not.toHaveBeenCalled();
+  });
+
+  it.each([302, 401, 403, 404, 500])(
+    "GAS HTTP %i 只安全記錄狀態欄位",
+    async (status) => {
+      const htmlBody = `<html>${sensitiveValues.rawText} ${sensitiveValues.nonce}</html>`;
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(htmlBody, {
+        status,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      })));
+      const current = createMessage();
+
+      await processQueueMessage(current.message, createEnv());
+
+      const serializedLogs = logOutput.join("\n");
+      expect(serializedLogs).toContain(
+        `"component":"gas","status":"http_error","correlationId":"evt-queue-001","errorCode":"GAS_HTTP_ERROR","httpStatus":${String(status)},"contentType":"text/html","redirected":false`,
+      );
+      expect(serializedLogs).not.toContain(htmlBody);
+      for (const sensitiveValue of Object.values(sensitiveValues)) {
+        expect(serializedLogs).not.toContain(sensitiveValue);
+      }
+      expect(current.ack).toHaveBeenCalledTimes(status >= 500 ? 0 : 1);
+      expect(current.retry).toHaveBeenCalledTimes(status >= 500 ? 1 : 0);
+    },
+  );
+
+  it("JSON HTTP 錯誤只記錄安全錯誤碼與診斷短指紋", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(
+      {
+        ok: false,
+        retryable: false,
+        errorCode: "SIGNATURE_INVALID",
+        diagnostic: {
+          gasSecretFingerprint: "a".repeat(16),
+          gasScriptIdSuffix: "Abc123-_",
+        },
+        payload: sensitiveValues.rawText,
+      },
+      { status: 401 },
+    )));
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv(false, true));
+
+    const serializedLogs = logOutput.join("\n");
+    expect(serializedLogs).toContain('"errorCode":"GAS_HTTP_ERROR"');
+    expect(serializedLogs).toContain('"upstreamErrorCode":"SIGNATURE_INVALID"');
+    expect(serializedLogs).toContain('"gasSecretFingerprint":"aaaaaaaaaaaaaaaa"');
+    expect(serializedLogs).toContain('"gasScriptIdSuffix":"Abc123-_"');
+    expect(serializedLogs).not.toContain(sensitiveValues.rawText);
+    expect(serializedLogs).not.toContain(sensitiveValues.gasUrl);
+    expect(serializedLogs).not.toContain(sensitiveValues.sharedSecret);
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
   });
 
   it("GAS 業務回應標示 retryable 時會 retry", async () => {
@@ -163,6 +222,34 @@ describe("Queue consumer", () => {
     expect(current.ack).toHaveBeenCalledOnce();
     expect(current.retry).not.toHaveBeenCalled();
   });
+
+  it.each(["SIGNATURE_INVALID", "NONCE_INVALID"])(
+    "GAS %s 會安全記錄並以 acknowledged 結束",
+    async (errorCode) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+        ok: false,
+        retryable: false,
+        errorCode,
+      })));
+      const current = createMessage();
+
+      await processQueueMessage(current.message, createEnv());
+
+      const serializedLogs = logOutput.join("\n");
+      expect(serializedLogs).toContain(
+        `"component":"gas","status":"rejected","correlationId":"evt-queue-001","errorCode":"${errorCode}"`,
+      );
+      expect(serializedLogs).toContain(
+        '"component":"queue","status":"acknowledged","correlationId":"evt-queue-001"',
+      );
+      expect(serializedLogs).not.toContain('"status":"completed"');
+      for (const sensitiveValue of Object.values(sensitiveValues)) {
+        expect(serializedLogs).not.toContain(sensitiveValue);
+      }
+      expect(current.ack).toHaveBeenCalledOnce();
+      expect(current.retry).not.toHaveBeenCalled();
+    },
+  );
 
   it("Push fallback 關閉時，Reply Token 失效只 ack 且不重做 GAS 工作", async () => {
     const fetchMock = vi.fn()
@@ -274,5 +361,48 @@ describe("Queue consumer", () => {
       expect(serializedLogs).not.toContain(sensitiveValue);
     }
     expect(serializedLogs).toContain("evt-queue-001");
+  });
+
+  it("診斷開啟時記錄 GAS 指紋，關閉時不記錄", async () => {
+    const response = Response.json({
+      ok: false,
+      retryable: false,
+      errorCode: "SIGNATURE_INVALID",
+      diagnostic: {
+        gasSecretFingerprint: "a".repeat(16),
+        gasSigningInputFingerprint: "b".repeat(16),
+        gasExpectedSignaturePrefix: "c".repeat(16),
+        gasProvidedSignaturePrefix: "d".repeat(16),
+        gasScriptIdSuffix: "Abc123-_",
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv(false, true));
+
+    const diagnosticLogs = logOutput.join("\n");
+    expect(diagnosticLogs).toContain('"gasSecretFingerprint":"aaaaaaaaaaaaaaaa"');
+    expect(diagnosticLogs).toContain('"gasScriptIdSuffix":"Abc123-_"');
+    expect(diagnosticLogs).not.toContain(sensitiveValues.rawText);
+    expect(diagnosticLogs).not.toContain(sensitiveValues.lineUserId);
+    expect(diagnosticLogs).not.toContain(sensitiveValues.sharedSecret);
+    expect(diagnosticLogs).not.toContain(sensitiveValues.gasUrl);
+
+    logOutput.length = 0;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      ok: false,
+      retryable: false,
+      errorCode: "SIGNATURE_INVALID",
+      diagnostic: {
+        gasSecretFingerprint: "a".repeat(16),
+        gasSigningInputFingerprint: "b".repeat(16),
+        gasExpectedSignaturePrefix: "c".repeat(16),
+        gasProvidedSignaturePrefix: "d".repeat(16),
+        gasScriptIdSuffix: "Abc123-_",
+      },
+    })));
+    await processQueueMessage(createMessage().message, createEnv(false, false));
+    expect(logOutput.join("\n")).not.toContain("gasSecretFingerprint");
   });
 });

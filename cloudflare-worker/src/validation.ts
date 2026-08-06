@@ -50,8 +50,9 @@ export function parseBooleanFlag(
 }
 
 export function requireNonEmpty(value: string | undefined, name: string): string {
-  if (value === undefined || value.trim().length === 0) {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized.length === 0) {
     throw new Error(`缺少必要設定：${name}`);
   }
-  return value;
+  return normalized;
 }

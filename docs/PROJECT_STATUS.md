@@ -1,8 +1,8 @@
 # 專案狀態
 
-最後更新：2026-07-31
+最後更新：2026-08-06
 
-目前為完成最後一輪部署前安全與可靠性修正的 MVP 原始碼。尚未部署、未登入任何帳號、未執行 OAuth 同意、未建立雲端資源，也未 Commit 或 Push。
+目前為完成一次性 HMAC 診斷模式的 MVP。GAS 程式已同步並更新既有 Web App deployment；Worker 已完成本輪部署，未設定 LINE Webhook，也未 Commit 或 Push。
 
 ## 已完成
 
@@ -12,6 +12,7 @@
 - 綁定流程支援 `PENDING`、`AUTHORIZED`、`PROVISIONING`、`COMPLETED`、`FAILED`。Google 授權成功後保留 OAuth Token；Drive／Sheet 初始化可重試並以 `lineBackupResourceKey` 重用部分資源。只有資源與 Users 資料備妥後，才在 Script Lock 內以單一 Sheets API 批次扣除邀請次數、完成 Session、消耗 nonce 並啟用使用者。
 - 新增管理者恢復入口 `resumeAuthorizedBinding()`。AUTHORIZED、FAILED 與租約已過期的 PROVISIONING Session 可在不重新消耗邀請碼的情況下恢復；完成後的 callback 會拒絕重播。
 - 新增 `ENABLE_PUSH_FALLBACK=false`。所有指令仍經 Queue；只有 LINE 明確回報 Reply Token 無效、GAS 有回覆文字且存在收件者時，才可選擇嘗試 Push。Reply／Push 失敗不會重做備份，一般成功附件不會自動 Push。
+- 新增一次性 `HMAC_DIAGNOSTIC_ENABLED`（Worker／GAS 預設 `false`）。診斷只記錄固定格式的短指紋，不輸出 Secret、payload、nonce、Token、URL 或原始識別碼；本輪受控測試期間暫時啟用，完成後應立即關閉。
 - GAS `doPost` 只有在 Worker HMAC、timestamp 與 nonce 完整驗證後，才允許寫入 Errors 或更新 Job；未驗證要求只留下不含輸入內容的安全 Console Log。
 - 預設單檔上限為 20 MiB；45 MiB 已在設定與操作文件標示為高風險且不保證成功。
 - `cleanupExpiredAdminRecords` 只清除過期 Nonces、已過期的 PENDING／COMPLETED BindingSessions、逾期 Errors 與逾期 COMPLETED Jobs；不刪除可恢復 Session、PROCESSING Jobs、Users、Groups、Invitations 或 Drive 檔案。
@@ -21,14 +22,14 @@
 
 - `npm run typecheck`：成功，TypeScript strict 無錯誤。
 - `npm run lint`：成功，ESLint 無錯誤。
-- `npm test`：成功，7 個 test files、53 個 tests 全部通過。
-- Coverage：statements 86.73%、branches 84.42%、functions 94.23%、lines 86.8%。`gas-client.ts` statements 85.29%、branches 86.95%、functions 100%；`line-client.ts` statements 81.81%、branches 94.44%、functions 100%。
-- `npm run build`：成功，Wrangler 4.116.0 dry-run bundle 21.26 KiB、gzip 5.82 KiB；沒有執行部署。
+- `npm test`：成功，7 個 test files、61 個 tests 全部通過。
+- Coverage：statements 88.01%、branches 83.95%、functions 94.64%、lines 88.05%。`gas-client.ts`、`line-client.ts` 與診斷 Log 分支均有測試。
+- `npm run build`：成功，Wrangler dry-run bundle 25.16 KiB、gzip 6.68 KiB；正式部署於本輪驗證後執行。
 - `npm audit --audit-level=high`：成功，0 個已知漏洞。
 - GAS 語法：17 個 `.gs` 以 Node.js `vm.Script` UTF-8 parser 全部通過。
 - JSON／JSONC：`appsscript.json`、`script-properties.example.json`、`package.json`、`package-lock.json`、`.clasp.json.example` 解析成功；`wrangler.jsonc.example` 的格式、`GAS_REQUEST_TIMEOUT_MS=55000`、`max_retries >= 5` 與 DLQ 設定均驗證成功。
 - Secret 掃描：10 類高風險憑證格式為 0 命中；Repository 內沒有正式 `.env`、`.dev.vars`、`wrangler.jsonc`、`.clasp.json` 或 `.clasprc.json`。
-- 文件：19 份 Markdown 的相對連結檢查通過。
+- 文件：19 份 Markdown 的相對連結檢查通過；已補充一次性 HMAC 診斷開關與關閉流程。
 - Git：目前分支為 `main`，Repository 尚無 Commit，67 個交付檔案全部為 untracked；`git diff` 因無已追蹤基準而沒有輸出。本次未 Commit、未 Push。
 
 Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No bindings found`；正式人工測試部署時才會複製 `wrangler.jsonc.example` 為被忽略的 `wrangler.jsonc`，由 Wrangler 載入 Queue bindings。Vitest 與 Wrangler 在 Windows 沙箱內因暫存檔／診斷 Log 權限遇到 `EPERM`，改在獲准的沙箱外執行後均通過。
@@ -42,4 +43,4 @@ Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No
 
 ## 部署判斷
 
-原始碼、範例設定、測試與文件已具備「首次管理者測試部署」條件，但尚未具備免驗證直接提供朋友正式使用的條件。首次測試部署仍須依 `FIRST_TIME_SETUP.md` 人工建立隔離的測試資源、填入真實 Secret（不得提交 Git），並完成上述 LINE／Google／Cloudflare 平台驗證。
+本輪 Worker 部署版本已通過 `/health` HTTP 200 安全回應驗證；GAS Web App deployment 已更新至版本 3。`HMAC_DIAGNOSTIC_ENABLED` 目前為受控診斷用途暫時啟用，完成一次 LINE「說明」測試並收集必要短指紋後，必須在 GAS 與 Worker 同步改回 `false` 並重新更新／部署。尚未設定 LINE Webhook，也未開始朋友邀請流程；正式提供朋友使用前仍須依 `FIRST_TIME_SETUP.md` 完成人工端對端驗證。
