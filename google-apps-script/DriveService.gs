@@ -9,13 +9,97 @@ function googleApiFetch_(url, options, accessToken, safeErrorCode) {
   }));
   var responseCode = response.getResponseCode();
   if (responseCode < 200 || responseCode >= 300) {
-    throw createAppError_(
-      safeErrorCode,
-      responseCode === 429 || responseCode >= 500,
-      'Google API 暫時無法完成操作。'
-    );
+    throw createDriveApiError_(response, safeErrorCode);
   }
   return response;
+}
+
+function createDriveCorrelationId_() {
+  return Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+}
+
+function sanitizeGoogleApiField_(value, fallback) {
+  var normalized = String(value || '')
+    .replace(/[^A-Za-z0-9_.:-]/g, '_')
+    .slice(0, 80);
+  return normalized || fallback;
+}
+
+function summarizeGoogleApiMessage_(value) {
+  var text = String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    return 'Google API 未提供錯誤摘要。';
+  }
+  // 不回傳可能包含 q、Folder ID、appProperties 或完整查詢的原始訊息。
+  if (/appProperties\s+has|in\s+parents|mimeType=|files\.list|[?&]q=/i.test(text)) {
+    return 'Google Drive 查詢錯誤。';
+  }
+  return text
+    .replace(/Bearer\s+\S+/gi, '[token]')
+    .replace(/https?:\/\/\S+/gi, '[url]')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]')
+    .replace(/\b[a-f0-9]{32,}\b/gi, '[id]')
+    .replace(/\b[A-Za-z0-9_-]{20,}\b/g, '[id]')
+    .slice(0, 160);
+}
+
+function getGoogleApiErrorDetails_(response) {
+  var body = '';
+  try {
+    body = response.getContentText();
+  } catch (error) {
+    return {
+      reason: 'RESPONSE_BODY_UNAVAILABLE',
+      domain: 'googleapis.com',
+      messageSummary: 'Google API 回應內容無法讀取。'
+    };
+  }
+  var parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch (error) {
+    return {
+      reason: 'NON_JSON_RESPONSE',
+      domain: 'googleapis.com',
+      messageSummary: 'Google API 回應不是 JSON。'
+    };
+  }
+  var googleError = parsed && parsed.error ? parsed.error : parsed;
+  var firstDetail = googleError && Array.isArray(googleError.errors) && googleError.errors.length > 0
+    ? googleError.errors[0]
+    : {};
+  return {
+    reason: sanitizeGoogleApiField_(firstDetail.reason || googleError.reason, 'UNKNOWN_REASON'),
+    domain: sanitizeGoogleApiField_(firstDetail.domain || googleError.domain, 'UNKNOWN_DOMAIN'),
+    messageSummary: summarizeGoogleApiMessage_(googleError.message || firstDetail.message)
+  };
+}
+
+function createDriveApiError_(response, safeErrorCode) {
+  var httpStatus = response.getResponseCode();
+  var details = getGoogleApiErrorDetails_(response);
+  var correlationId = createDriveCorrelationId_();
+  console.warn(JSON.stringify({
+    component: 'drive',
+    status: 'http_error',
+    errorCode: String(safeErrorCode || 'DRIVE_API_ERROR').slice(0, 60),
+    httpStatus: httpStatus,
+    googleReason: details.reason,
+    googleDomain: details.domain,
+    googleMessageSummary: details.messageSummary,
+    correlationId: correlationId
+  }));
+  var appError = createAppError_(
+    safeErrorCode,
+    httpStatus === 429 || httpStatus >= 500,
+    'Google API 暫時無法完成操作，請稍後重試。'
+  );
+  appError.correlationId = correlationId;
+  appError.httpStatus = httpStatus;
+  appError.googleReason = details.reason;
+  appError.googleDomain = details.domain;
+  appError.googleMessageSummary = details.messageSummary;
+  return appError;
 }
 
 function parseJsonResponse_(response, errorCode) {
@@ -54,10 +138,10 @@ function createDriveFolder_(accessToken, folderName, parentId, appProperties) {
   return result.id;
 }
 
-function findDriveItemByAppProperty_(accessToken, propertyName, propertyValue, parentId, mimeType) {
+function buildDriveAppPropertiesQuery_(propertyName, propertyValue, parentId, mimeType) {
   if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(propertyName) ||
-      typeof propertyValue !== 'string' || !/^[a-f0-9]{64}$/.test(propertyValue)) {
-    throw createAppError_('DRIVE_APP_PROPERTY_INVALID', false, 'Drive 冪等識別資料不正確。');
+      typeof propertyValue !== 'string' || propertyValue.length === 0 || propertyValue.length > 200) {
+    throw createAppError_('DRIVE_APP_PROPERTY_INVALID', false, 'Drive appProperties 設定無效。');
   }
   var queryParts = [
     "appProperties has { key='" + escapeDriveQuery_(propertyName) +
@@ -70,12 +154,17 @@ function findDriveItemByAppProperty_(accessToken, propertyName, propertyValue, p
   if (mimeType) {
     queryParts.push("mimeType='" + escapeDriveQuery_(mimeType) + "'");
   }
-  var url = 'https://www.googleapis.com/drive/v3/files?q=' +
-    encodeURIComponent(queryParts.join(' and ')) +
-    '&spaces=drive&fields=files(id,name,mimeType,webViewLink,appProperties)&pageSize=2';
-  var response = googleApiFetch_(url, { method: 'get' }, accessToken, 'DRIVE_IDEMPOTENCY_SEARCH_FAILED');
-  var result = parseJsonResponse_(response, 'DRIVE_IDEMPOTENCY_SEARCH_INVALID');
-  if (!Array.isArray(result.files) || result.files.length === 0) {
+  return queryParts.join(' and ');
+}
+
+function buildDriveFilesListUrl_(query) {
+  var fields = 'files(id,name,mimeType,appProperties,webViewLink)';
+  return 'https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent(query) +
+    '&spaces=drive&fields=' + encodeURIComponent(fields) + '&pageSize=2';
+}
+
+function getDriveItemFromListResult_(result) {
+  if (!result || !Array.isArray(result.files) || result.files.length === 0) {
     return null;
   }
   var file = result.files[0];
@@ -88,6 +177,18 @@ function findDriveItemByAppProperty_(accessToken, propertyName, propertyValue, p
       ? file.webViewLink
       : 'https://drive.google.com/open?id=' + encodeURIComponent(String(file.id))
   };
+}
+
+function findDriveItemByAppProperty_(accessToken, propertyName, propertyValue, parentId, mimeType) {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(propertyName) ||
+      typeof propertyValue !== 'string' || !/^[a-f0-9]{64}$/.test(propertyValue)) {
+    throw createAppError_('DRIVE_APP_PROPERTY_INVALID', false, 'Drive 冪等識別資料不正確。');
+  }
+  var query = buildDriveAppPropertiesQuery_(propertyName, propertyValue, parentId, mimeType);
+  var url = buildDriveFilesListUrl_(query);
+  var response = googleApiFetch_(url, { method: 'get' }, accessToken, 'DRIVE_IDEMPOTENCY_SEARCH_FAILED');
+  var result = parseJsonResponse_(response, 'DRIVE_IDEMPOTENCY_SEARCH_INVALID');
+  return getDriveItemFromListResult_(result);
 }
 
 function escapeDriveQuery_(value) {

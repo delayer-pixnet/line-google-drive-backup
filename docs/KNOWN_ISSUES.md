@@ -13,6 +13,7 @@
 9. 同一個只剩 1 次使用額度的邀請碼可先建立多個 PENDING BindingSessions，但 OAuth 成功轉 AUTHORIZED 時會在 Script Lock 內保留名額，只有仍有額度者能進入初始化。FAILED Session 會保留名額直到恢復完成或管理者介入。
 10. `IDENTIFIER_HASH_SECRET` 是永久資料關聯根金鑰。上線後直接輪替會使 Users、Groups、邀請、Nonce、OAuth Service 與 Drive appProperties 全部無法對應；本版不含已部署資料的雙金鑰遷移工具。
 11. AUTHORIZED／FAILED 綁定恢復目前由管理者手動設定 `BINDING_RECOVERY_LINE_USER_HASH` 並執行 `resumeAuthorizedBinding()`；尚未提供一般使用者自助頁面或排程恢復。
+12. Drive 初始化的 appProperties 查詢若遭 Google API 拒絕，GAS 只會在安全 Log 提供 HTTP status、reason、domain、摘要與 correlationId；完整 Drive query、File ID、Token 不會記錄。`files.list` 空結果是正常的不存在狀態，會進入冪等建立流程；非 2xx 會將 BindingSession 保留為 FAILED 供恢復。
 
 ## 必須在正式帳號人工驗證
 

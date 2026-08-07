@@ -370,6 +370,89 @@ function testDriveEventIdempotencyKey() {
   console.log('Drive appProperties 冪等鍵測試通過。');
 }
 
+function testBuildDriveAppPropertiesQuery() {
+  var propertyName = 'lineBackupResourceKey';
+  var propertyValue = 'value\'with\\slash';
+  var query = buildDriveAppPropertiesQuery_(
+    propertyName,
+    propertyValue,
+    'parent-folder-id',
+    'application/vnd.google-apps.folder'
+  );
+  assertTest_(query.indexOf("appProperties has { key='lineBackupResourceKey'") === 0, 'Drive appProperties 查詢格式不正確。');
+  assertTest_(query.indexOf("value='" + escapeDriveQuery_(propertyValue) + "'") >= 0, 'appProperties value 必須正確跳脫。');
+  assertTest_(query.indexOf('trashed=false') >= 0, 'Drive 查詢必須排除垃圾桶檔案。');
+  assertTest_(query.indexOf("mimeType='application/vnd.google-apps.folder'") >= 0, '資料夾查詢必須限制 mimeType。');
+  console.log('Drive appProperties 查詢格式測試通過。');
+}
+
+function testDriveFilesListUrlEncoding() {
+  var query = buildDriveAppPropertiesQuery_(
+    'lineBackupResourceKey',
+    'a'.repeat(64),
+    'parent-folder-id',
+    'application/vnd.google-apps.folder'
+  );
+  var url = buildDriveFilesListUrl_(query);
+  assertTest_(url.indexOf('q=' + encodeURIComponent(query)) >= 0, 'Drive q 必須使用 URL encode。');
+  assertTest_(url.indexOf('fields=' + encodeURIComponent('files(id,name,mimeType,appProperties,webViewLink)')) >= 0, 'Drive fields 必須使用 URL encode。');
+  console.log('Drive files.list URL 編碼測試通過。');
+}
+
+function testDriveFilesListEmptyResultIsNotError() {
+  assertTest_(getDriveItemFromListResult_({ files: [] }) === null, 'Drive files.list 空結果應視為不存在並回傳 null。');
+  assertTest_(getDriveItemFromListResult_({}) === null, 'Drive files.list 缺少 files 時應安全視為空結果。');
+  console.log('Drive files.list 空結果測試通過。');
+}
+
+function testDriveApiErrorDiagnostics() {
+  var response = {
+    getResponseCode: function () { return 400; },
+    getContentText: function () {
+      return JSON.stringify({
+        error: {
+          code: 400,
+          message: "Invalid query: appProperties has value='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+          errors: [{ reason: 'invalidQuery', domain: 'global', message: 'Invalid query' }]
+        }
+      });
+    }
+  };
+  var error = createDriveApiError_(response, 'DRIVE_IDEMPOTENCY_SEARCH_FAILED');
+  assertTest_(error.appCode === 'DRIVE_IDEMPOTENCY_SEARCH_FAILED', 'Drive 400 應保留安全錯誤碼。');
+  assertTest_(error.httpStatus === 400, 'Drive 錯誤應記錄 HTTP status。');
+  assertTest_(error.googleReason === 'invalidQuery', 'Drive 錯誤應記錄安全 reason。');
+  assertTest_(error.googleDomain === 'global', 'Drive 錯誤應記錄安全 domain。');
+  assertTest_(error.googleMessageSummary === 'Google Drive 查詢錯誤。', 'Drive 查詢錯誤摘要不得包含完整 query。');
+  var safeText = JSON.stringify(error);
+  assertTest_(safeText.indexOf('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') < 0, 'Drive 錯誤不得包含完整 appProperties value。');
+  console.log('Drive API 400 安全診斷測試通過。');
+}
+
+function testFailedBindingSessionCanResume() {
+  ensureAdminSheets_();
+  var lineUserHash = '9'.repeat(64);
+  var bindNonce = Utilities.getUuid().replace(/-/g, '').toLowerCase();
+  var expiresAt = Date.now() + 60000;
+  appendAdminRow_('BindingSessions', [
+    getBindingSessionNonceHash_(bindNonce),
+    lineUserHash,
+    '8'.repeat(64),
+    new Date(expiresAt),
+    '',
+    'FAILED',
+    getTaipeiNow_(),
+    getTaipeiNow_(),
+    'DRIVE_IDEMPOTENCY_SEARCH_FAILED'
+  ]);
+  var recoverable = findRecoverableBindingSessionByUserHash_(lineUserHash);
+  assertTest_(recoverable && recoverable.Status === 'FAILED', 'FAILED BindingSession 應可被恢復流程找到。');
+  var provisioning = beginBindingSessionProvisioning_(lineUserHash, recoverable.SessionNonceHash);
+  assertTest_(provisioning.Status === 'PROVISIONING', 'FAILED BindingSession 應可再次進入 PROVISIONING。');
+  markBindingSessionFailed_(lineUserHash, provisioning.SessionNonceHash, 'MANUAL_RESUME_CHECK');
+  console.log('FAILED BindingSession 可恢復測試通過。');
+}
+
 function testFailedJobPreservesDriveFileId() {
   ensureAdminSheets_();
   var eventId = 'manual-failed-job-' + Date.now();
@@ -499,6 +582,34 @@ function testAuthorizedBindingFailureIsRecoverable() {
   markBindingSessionFailed_(lineUserHash, retried.SessionNonceHash, 'MANUAL_RETRY_STOP');
   assertTest_(Number(findInvitationByHash_(invitation.InviteCodeHash).UsedCount) === 0, '恢復重試不可再次消耗邀請碼。');
   console.log('AUTHORIZED 初始化失敗與恢復測試通過。');
+}
+
+function testRecoveryLineUserHashValidation() {
+  assertTest_(assertRecoveryLineUserHash_('a'.repeat(64)) === 'a'.repeat(64), '64 碼雜湊應通過恢復檢查。');
+  var invalidErrorCode = '';
+  try {
+    assertRecoveryLineUserHash_('not-a-line-user-hash');
+  } catch (error) {
+    invalidErrorCode = error && error.appCode;
+  }
+  assertTest_(invalidErrorCode === 'BIND_RECOVERY_USER_INVALID', '無效恢復雜湊應遭拒絕。');
+  console.log('OAuth Token 恢復雜湊安全檢查通過。');
+}
+
+function testGoogleUserOAuthScopes() {
+  var scopeString = getGoogleUserOAuthScopeString_();
+  var scopes = scopeString.split(/\s+/);
+  assertTest_(scopes.indexOf('openid') >= 0, '使用者 OAuth 必須包含 openid。');
+  assertTest_(scopes.indexOf('email') >= 0, '使用者 OAuth 必須包含 email。');
+  assertTest_(scopes.indexOf('profile') >= 0, '使用者 OAuth 必須包含 profile。');
+  assertTest_(scopes.indexOf('https://www.googleapis.com/auth/drive.file') >= 0, '使用者 OAuth 必須包含 drive.file。');
+  assertTest_(scopes.indexOf('https://www.googleapis.com/auth/script.external_request') < 0, '使用者 OAuth 不得包含 script.external_request。');
+  assertTest_(scopes.indexOf('https://www.googleapis.com/auth/spreadsheets') < 0, '使用者 OAuth 不得只使用 spreadsheets。');
+  var params = getGoogleOAuthAuthorizationParams_({ stateMarker: 'manual-test' });
+  assertTest_(params.access_type === 'offline', '授權 URL 必須要求 offline。');
+  assertTest_(params.prompt === 'consent', '授權 URL 必須要求 consent。');
+  assertTest_(params.stateMarker === 'manual-test', 'OAuth state 額外參數不可遺失。');
+  console.log('使用者 Google OAuth scope 與授權參數測試通過。');
 }
 
 function testBindingProvisioningReusesResources() {

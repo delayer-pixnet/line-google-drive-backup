@@ -20,6 +20,7 @@
 | 約 7 天後需重綁 | External OAuth App 仍是 Testing | 依 Google 政策評估 Production／驗證；測試期先重綁 | Refresh Token 可按預期持續 |
 | OAuth callback 失敗 | Client ID／Secret 錯、Library 缺少、state／BindingSession 無效或 callback 已重送 | 核對 Script Properties、OAuth2 identifier `OAuth2`、版本與 callback；不要輸出 state 或 nonce | 首次 callback 進入授權／初始化；完成後重送安全拒絕 |
 | Google 已授權但初始化失敗 | Drive／Sheets 配額、暫時性 API 錯誤或 Apps Script 中止 | 先排除外部錯誤；確認 BindingSessions 為 `AUTHORIZED`、`PROVISIONING` 或 `FAILED`。暫設 `BINDING_RECOVERY_LINE_USER_HASH` 為該列 64 位雜湊後，無參數執行 `resumeAuthorizedBinding` | 重用部分資源並完成 Users；暫存 Property 自動刪除，邀請只扣 1 次 |
+| 需要讓失敗綁定重新授權 | 測試部署期 OAuth Service 內仍保留失敗授權 Token | 管理者暫設 `BINDING_RECOVERY_LINE_USER_HASH` 為 64 位雜湊，手動執行 `clearOAuthTokenForRecoveryLineUserHash`；執行後 Property 會自動刪除，未完成 BindingSessions 會標示 `FAILED` | 該使用者可用新的綁定流程重新授權；不刪 Users、Groups、Invitations 或 Drive 檔案 |
 | OAuth 取消或初始化失敗但邀請次數減少 | 使用舊版流程或 Invitations 被人工修改 | 更新至目前版本並核對 BindingSessions；目前只在資源與 Users 備妥後的最後受鎖階段增加 UsedCount | 取消／初始化失敗不扣次數，完成只扣 1 次 |
 | 私訊附件說未綁定 | Users disabled 或 OAuth Token 已撤銷 | 私訊 `狀態`，重新用新邀請碼綁定 | Users Enabled=true |
 | 附件下載 401／404 | LINE Token 錯、messageId 已失效 | 更新 GAS `LINE_CHANNEL_ACCESS_TOKEN`；不要重用很舊事件 | 新附件可下載 |
@@ -28,6 +29,7 @@
 | Job 長時間停在 `PROCESSING` | Apps Script 逾時／中止，或租約尚未到期 | 查看 Worker 是否收到 `JOB_IN_PROGRESS`。租約有效時應依 `retryAfterSeconds` 延後且不可 ACK；預設租約 600 秒。不要手動清空 DriveFileId，也不要刪除 `PROCESSING` 列 | 原程序完成後重送 ACK；若中止，租約過期後重取並增加 RetryCount |
 | Worker 顯示 `GAS_NETWORK_ERROR`，但 GAS 仍在執行 | Worker 55 秒 timeout 先到；Apps Script 不一定同步停止 | 不要手動重送或把 Job 改成 FAILED。讓 Queue 重送；有效租約會回 `JOB_IN_PROGRESS` 並延後至租約到期後 | 不會 ACK 掉唯一工作，也不會在有效租約內重做 |
 | Drive 出現重複檔案 | 舊版檔案沒有 `lineBackupEventKey`、目標資料夾錯誤，或 Drive API 查詢失敗 | 檢查同一事件的檔案是否在正確目標資料夾且 appProperties 有相同鍵；新版重試會先查詢並重用 File ID。不要只依檔名或未確認事件批次刪除 | Jobs、Sheet 與單一 Drive File ID 對應一致 |
+| `DRIVE_IDEMPOTENCY_SEARCH_FAILED` | Drive `files.list` 回傳 400／401／403／5xx、OAuth 權限不足或查詢格式錯誤 | 查看 GAS 安全 Log 的 `httpStatus`、`googleReason`、`googleDomain`、`googleMessageSummary` 與 `correlationId`；不得記錄完整 q、File ID 或 Token。確認 `drive.file` 授權與目標資料夾仍由本應用程式建立 | 200 且 `files=[]` 會建立新資料夾；非 2xx 會保留 FAILED BindingSession，可執行 `resumeAuthorizedBinding` |
 | 群組一般聊天沒保存 | 這是設計行為 | 使用 `#筆記` 或明確提及 Bot | owner Sheet 新增列 |
 | `綁定群組` 說 owner 未綁定 | 指令者尚未完成個人 OAuth | 私訊完成綁定，再回同一群組執行 | Groups Enabled=true |
 | 新 owner 無法接管 | 舊 owner 尚未解除 | 原 owner 執行 `解除群組`；若失聯由管理者核對後停用該 Groups 列 | 新 owner 可綁定 |

@@ -41,7 +41,68 @@ function provisionAuthorizedBinding_(lineUserHash, session) {
       ? error
       : createAppError_('BIND_PROVISIONING_FAILED', true, 'Google 備份空間初始化失敗，請稍後重試。');
     markBindingSessionFailed_(lineUserHash, provisioningSession.SessionNonceHash, appError.appCode);
+    safeLog_(
+      'error',
+      'binding-recovery',
+      appError.appCode,
+      appError.correlationId || 'binding-recovery'
+    );
     throw appError;
+  }
+}
+
+function assertRecoveryLineUserHash_(lineUserHash) {
+  if (typeof lineUserHash !== 'string' || !/^[a-f0-9]{64}$/.test(lineUserHash)) {
+    throw createAppError_(
+      'BIND_RECOVERY_USER_INVALID',
+      false,
+      '請提供有效的 LINE 使用者雜湊。'
+    );
+  }
+  return lineUserHash;
+}
+
+function markUnfinishedBindingSessionsFailedForReset_(lineUserHash) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var updatedCount = 0;
+    getSheetRecords_('BindingSessions').forEach(function (session) {
+      if (session.LineUserHash === lineUserHash && session.Status !== BINDING_SESSION_STATUS_.COMPLETED) {
+        updateBindingSessionStateWithoutLock_(
+          session,
+          BINDING_SESSION_STATUS_.FAILED,
+          'OAUTH_TOKEN_RESET_FOR_REBIND'
+        );
+        updatedCount += 1;
+      }
+    });
+    return updatedCount;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * 測試部署期由管理者手動執行；只清除指定雜湊使用者的 OAuth Token，
+ * 不刪除 Users、Groups、Invitations 或 Drive 檔案。執行後會刪除暫存 Property。
+ */
+function clearOAuthTokenForRecoveryLineUserHash() {
+  var properties = PropertiesService.getScriptProperties();
+  try {
+    var lineUserHash = assertRecoveryLineUserHash_(
+      properties.getProperty('BINDING_RECOVERY_LINE_USER_HASH')
+    );
+    // 使用與正式流程相同的 LineUser_<hash> OAuth Service 名稱。
+    getGoogleOAuthService_(lineUserHash).reset();
+    var failedSessionCount = markUnfinishedBindingSessionsFailedForReset_(lineUserHash);
+    safeLog_('warn', 'oauth-recovery', 'OAUTH_TOKEN_RESET_FOR_REBIND', 'oauth-recovery');
+    return {
+      reset: true,
+      failedSessionCount: failedSessionCount
+    };
+  } finally {
+    properties.deleteProperty('BINDING_RECOVERY_LINE_USER_HASH');
   }
 }
 
@@ -57,13 +118,7 @@ function resumeAuthorizedBinding(lineUserHash) {
     ? properties.getProperty('BINDING_RECOVERY_LINE_USER_HASH')
     : lineUserHash;
   try {
-    if (typeof effectiveLineUserHash !== 'string' || !/^[a-f0-9]{64}$/.test(effectiveLineUserHash)) {
-      throw createAppError_(
-        'BIND_RECOVERY_USER_INVALID',
-        false,
-        '請提供有效的 LINE 使用者雜湊以恢復綁定。'
-      );
-    }
+    assertRecoveryLineUserHash_(effectiveLineUserHash);
     var session = findRecoverableBindingSessionByUserHash_(effectiveLineUserHash);
     if (!session) {
       throw createAppError_('BIND_SESSION_NOT_RECOVERABLE', false, '找不到可恢復的綁定工作階段。');

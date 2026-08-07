@@ -1,3 +1,22 @@
+var GOOGLE_USER_OAUTH_SCOPES_ = Object.freeze([
+  'openid',
+  'email',
+  'profile',
+  'https://www.googleapis.com/auth/drive.file'
+]);
+
+function getGoogleUserOAuthScopeString_() {
+  return GOOGLE_USER_OAUTH_SCOPES_.join(' ');
+}
+
+function getGoogleOAuthAuthorizationParams_(extraParams) {
+  var params = Object.assign({}, extraParams || {});
+  params.access_type = 'offline';
+  params.prompt = 'consent';
+  params.include_granted_scopes = 'true';
+  return params;
+}
+
 function getGoogleOAuthService_(lineUserHash) {
   if (typeof lineUserHash !== 'string' || !/^[a-f0-9]{64}$/.test(lineUserHash)) {
     throw createAppError_('OAUTH_USER_KEY_INVALID', false, 'OAuth 使用者識別無效。');
@@ -11,7 +30,7 @@ function getGoogleOAuthService_(lineUserHash) {
     .setPropertyStore(PropertiesService.getScriptProperties())
     .setCache(CacheService.getScriptCache())
     .setLock(LockService.getScriptLock())
-    .setScope('openid email profile https://www.googleapis.com/auth/drive.file')
+    .setScope(getGoogleUserOAuthScopeString_())
     .setParam('access_type', 'offline')
     .setParam('prompt', 'consent')
     .setParam('include_granted_scopes', 'true');
@@ -34,11 +53,11 @@ function renderBindPage_(bindToken) {
   );
   var service = getGoogleOAuthService_(tokenPayload.lineUserHash);
   var template = HtmlService.createTemplateFromFile('BindPage');
-  template.authorizationUrl = service.getAuthorizationUrl({
+  template.authorizationUrl = service.getAuthorizationUrl(getGoogleOAuthAuthorizationParams_({
     lineUserHash: tokenPayload.lineUserHash,
     bindNonce: tokenPayload.nonce,
     expiresAt: String(tokenPayload.expiresAt)
-  });
+  }));
   return template.evaluate()
     .setTitle('綁定 Google Drive')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);

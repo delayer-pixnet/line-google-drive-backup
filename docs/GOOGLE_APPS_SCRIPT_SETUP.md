@@ -14,6 +14,8 @@
 3. 確認 `appsscript.json` 包含 OAuth2 Library dependency。若需由 UI 手動加入，Library Script ID 為公開的官方 ID `1B7FSrk5Zi6L1rSxxTDgDEUsPzlukDsi4KGuTMorsTQHhGBzBkMun4iDF`，identifier 使用 `OAuth2`，版本使用文件指定版本或經測試的新版本。
 4. 預期左側檔案清單可看到 `Main.gs`、`OAuth.gs`、各 Service／Repository、2 個 HTML 與 `appsscript.json`。
 
+`appsscript.json` 的 `oauthScopes` 是 Apps Script 程式自身執行用權限，例如 `script.external_request` 與管理 Sheet 的 `spreadsheets`；它們不等於朋友 Google 帳號的授權範圍。朋友的 OAuth scope 只由 `OAuth.gs` 的 `getGoogleOAuthService_()` 明確設定，包含 `openid`、`email`、`profile` 與 `https://www.googleapis.com/auth/drive.file`，並要求 `access_type=offline`、`prompt=consent`。因此首次開啟 Web App 可能先看到 Apps Script 自身的授權畫面；完成該層授權後，綁定連結才會顯示使用者 Google OAuth 的 Drive 檔案權限。不要把 `script.external_request` 加入使用者 OAuth scope，也不要把 `drive.file` 當成管理者 Apps Script scope。
+
 ## 3. Script Properties 完整對照
 
 到 Project Settings → Script Properties 逐項新增。值不可放入 `.gs`、`appsscript.json` 或 Git。
