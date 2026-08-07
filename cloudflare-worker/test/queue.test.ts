@@ -34,7 +34,11 @@ const queueJob: QueueJob = {
   bindToken: null,
 };
 
-function createEnv(enablePushFallback = false, diagnosticEnabled = false): Env {
+function createEnv(
+  enablePushFallback = false,
+  diagnosticEnabled = false,
+  enableBackupSuccessReply = true,
+): Env {
   return {
     BACKUP_QUEUE: {} as Queue<QueueJob>,
     LINE_CHANNEL_SECRET: "line-signature-secret",
@@ -43,6 +47,7 @@ function createEnv(enablePushFallback = false, diagnosticEnabled = false): Env {
     WORKER_GAS_SHARED_SECRET: sensitiveValues.sharedSecret,
     BIND_TOKEN_SECRET: "bind-token-secret-sensitive",
     IDENTIFIER_HASH_SECRET: sensitiveValues.identifierSecret,
+    ENABLE_BACKUP_SUCCESS_REPLY: String(enableBackupSuccessReply),
     ENABLE_PUSH_FALLBACK: String(enablePushFallback),
     HMAC_DIAGNOSTIC_ENABLED: String(diagnosticEnabled),
   };
@@ -221,6 +226,92 @@ describe("Queue consumer", () => {
 
     expect(current.ack).toHaveBeenCalledOnce();
     expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("個人備份成功使用 Reply API 回覆，且不使用 Push", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        ok: true,
+        backupSuccessReply: true,
+        replyMessage: "✅ 圖片已備份",
+      }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+    const attachmentMessage = {
+      ...current.message,
+      body: { ...queueJob, messageType: "image", rawText: null },
+    } as unknown as Message<QueueJob>;
+
+    await processQueueMessage(attachmentMessage, createEnv(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
+    expect(String(fetchMock.mock.calls[1]?.[0])).not.toContain("/message/push");
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("群組附件成功不回覆以避免洗版", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      ok: true,
+      backupSuccessReply: true,
+      replyMessage: "✅ 圖片已備份",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+    const groupMessage = {
+      ...current.message,
+      body: {
+        ...queueJob,
+        messageType: "image",
+        groupId: "C-group-sensitive",
+        rawText: null,
+      },
+    } as unknown as Message<QueueJob>;
+
+    await processQueueMessage(groupMessage, createEnv(true));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("備份成功 Reply 失敗不會重做備份或改用 Push", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        ok: true,
+        backupSuccessReply: true,
+        replyMessage: "✅ 文字已備份",
+      }))
+      .mockResolvedValueOnce(Response.json(
+        { message: "Invalid reply token" },
+        { status: 400 },
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("停用備份成功 Reply 時只 ACK，不呼叫 Reply API", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      ok: true,
+      backupSuccessReply: true,
+      replyMessage: "✅ 文字已備份",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv(false, false, false));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(current.ack).toHaveBeenCalledOnce();
   });
 
   it.each(["SIGNATURE_INVALID", "NONCE_INVALID"])(

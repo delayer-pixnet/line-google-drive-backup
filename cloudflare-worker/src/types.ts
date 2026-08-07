@@ -52,6 +52,7 @@ export interface Env {
   readonly MAX_FILE_SIZE_BYTES?: string;
   readonly BIND_TOKEN_TTL_SECONDS?: string;
   readonly GAS_REQUEST_TIMEOUT_MS?: string;
+  readonly ENABLE_BACKUP_SUCCESS_REPLY?: string;
   readonly ENABLE_PUSH_FALLBACK?: string;
   readonly HMAC_DIAGNOSTIC_ENABLED?: string;
 }
@@ -70,6 +71,7 @@ export interface HmacDiagnostic {
 export interface GasResult {
   readonly ok: boolean;
   readonly replyMessage?: string;
+  readonly backupSuccessReply?: boolean;
   readonly retryable?: boolean;
   readonly errorCode?: string;
   readonly retryAfterSeconds?: number;

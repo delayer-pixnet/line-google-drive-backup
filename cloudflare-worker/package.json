@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "overrides": {
+    "undici": "7.29.0"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

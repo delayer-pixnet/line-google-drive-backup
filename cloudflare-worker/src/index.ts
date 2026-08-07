@@ -125,10 +125,17 @@ export async function processQueueMessage(
         diagnostic: hmacDiagnostic,
       });
     }
-    if (
+    const isBackupSuccessReply = gasResult.backupSuccessReply === true;
+    const isGroupBackupAttachment =
+      isBackupSuccessReply &&
+      message.body.groupId !== null &&
+      message.body.command !== "note";
+    const shouldSendReply =
       gasResult.replyMessage !== undefined &&
-      message.body.replyToken !== null
-    ) {
+      message.body.replyToken !== null &&
+      !isGroupBackupAttachment &&
+      (!isBackupSuccessReply || parseBooleanFlag(env.ENABLE_BACKUP_SUCCESS_REPLY, true));
+    if (shouldSendReply) {
       try {
         await replyTextMessage(
           requireNonEmpty(env.LINE_CHANNEL_ACCESS_TOKEN, "LINE_CHANNEL_ACCESS_TOKEN"),
@@ -148,6 +155,7 @@ export async function processQueueMessage(
         const pushRecipient = message.body.groupId ?? message.body.lineUserId;
         if (
           isInvalidReplyTokenError(error) &&
+          !isBackupSuccessReply &&
           parseBooleanFlag(env.ENABLE_PUSH_FALLBACK, false) &&
           pushRecipient !== null
         ) {

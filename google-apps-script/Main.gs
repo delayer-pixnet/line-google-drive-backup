@@ -53,7 +53,14 @@ function doPost(request) {
     } else {
       completeJob_(job.webhookEventId, result.driveFileId || '');
     }
-    return jsonOutput_({ ok: true, replyMessage: result.replyMessage || undefined });
+    var response = { ok: true };
+    if (result.replyMessage) {
+      response.replyMessage = result.replyMessage;
+    }
+    if (result.backupSuccessReply === true) {
+      response.backupSuccessReply = true;
+    }
+    return jsonOutput_(response);
   } catch (error) {
     var appError = isAppError_(error)
       ? error
@@ -276,6 +283,42 @@ function resolveBackupContext_(job) {
   };
 }
 
+function getBackupSuccessReplyMessage_(job) {
+  if (job.command === 'note') {
+    return '✅ 筆記已備份。';
+  }
+  // 群組附件預設不回覆，避免在群組中洗版。
+  if (job.groupId) {
+    return null;
+  }
+  var messages = {
+    text: '✅ 文字已備份',
+    image: '✅ 圖片已備份',
+    video: '✅ 影片已備份',
+    audio: '✅ 音訊已備份'
+  };
+  if (messages[job.messageType]) {
+    return messages[job.messageType];
+  }
+  if (job.messageType === 'file') {
+    return '✅ 檔案已備份：' + sanitizeFileName_(job.fileName, '檔案');
+  }
+  return null;
+}
+
+function createBackupSuccessResult_(job, driveFileId) {
+  var replyMessage = getBackupSuccessReplyMessage_(job);
+  var result = {};
+  if (driveFileId) {
+    result.driveFileId = driveFileId;
+  }
+  if (replyMessage) {
+    result.replyMessage = replyMessage;
+    result.backupSuccessReply = true;
+  }
+  return result;
+}
+
 function backupMessage_(job) {
   var context = resolveBackupContext_(job);
   var accessToken = getUserAccessToken_(context.ownerHash);
@@ -298,7 +341,7 @@ function backupMessage_(job) {
     touchJobLease_(job.webhookEventId);
     appendBackupRecord_(accessToken, context.sheetId, baseRecord);
     touchJobLease_(job.webhookEventId);
-    return { replyMessage: job.command === 'note' ? '筆記已保存。' : undefined };
+    return createBackupSuccessResult_(job, null);
   }
   if (job.rejectionCode === 'FILE_TOO_LARGE') {
     baseRecord.status = '拒絕';
@@ -351,7 +394,7 @@ function backupMessage_(job) {
     touchJobLease_(job.webhookEventId);
     appendBackupRecord_(accessToken, context.sheetId, baseRecord);
     touchJobLease_(job.webhookEventId);
-    return { driveFileId: driveFile.id };
+    return createBackupSuccessResult_(job, driveFile.id);
   } catch (error) {
     if (isAppError_(error) && error.appCode === 'FILE_TOO_LARGE') {
       baseRecord.status = '拒絕';

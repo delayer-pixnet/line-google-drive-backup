@@ -52,6 +52,25 @@ describe("GAS client", () => {
     expect(envelope.nonce).toMatch(/^[a-f0-9]{32}$/u);
   });
 
+  it("解析備份成功 Reply 標記", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      ok: true,
+      backupSuccessReply: true,
+      replyMessage: "✅ 文字已備份",
+    })));
+
+    await expect(callGas(
+      "https://example.invalid/exec",
+      "shared-secret-for-test",
+      testJob,
+      5000,
+    )).resolves.toMatchObject({
+      ok: true,
+      backupSuccessReply: true,
+      replyMessage: "✅ 文字已備份",
+    });
+  });
+
   it("診斷關閉時不產生 Worker 指紋", async () => {
     const envelope = await createGasEnvelope(
       testJob,

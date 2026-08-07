@@ -20,7 +20,7 @@ npm run build
 1. 複製 `wrangler.jsonc.example` 為 `wrangler.jsonc`。
 2. `name` 改成自己的非敏感 Worker 名稱。
 3. Queue 名稱可保留範例或改為相同的自訂名稱；producer 與 consumer 的 `queue` 必須完全一致。
-4. `vars` 不是 Secret，只放檔案上限、綁定期限、GAS timeout 與 Push fallback 開關。不要在此放 Token、Secret 或 endpoint。
+4. `vars` 不是 Secret，只放檔案上限、綁定期限、GAS timeout 與回覆開關。不要在此放 Token、Secret 或 endpoint。
 
 ## 3. 登入與建立 Queue
 
@@ -52,13 +52,14 @@ npx wrangler queues create line-google-drive-backup-dlq
 
 ## 5. 非 Secret vars
 
-`wrangler.jsonc` 的 `vars` 共 5 項：
+`wrangler.jsonc` 的 `vars` 共 6 項：
 
 | 名稱 | 範例 | 說明與錯誤現象 |
 |---|---:|---|
 | `MAX_FILE_SIZE_BYTES` | `20971520` | 預設 20 MiB；GAS 必須設同值。45 MiB 屬高風險且不保證成功；超過 49 MiB 會回退安全預設 |
 | `BIND_TOKEN_TTL_SECONDS` | `600` | 綁定連結秒數，允許 1 至 3600；錯誤時用 600 |
 | `GAS_REQUEST_TIMEOUT_MS` | `55000` | Worker 等 GAS 毫秒數，最大 60000。timeout 不表示 GAS 已停止；重送遇有效租約時會依 GAS 回傳延後，不可 ACK |
+| `ENABLE_BACKUP_SUCCESS_REPLY` | `true` | 個人私訊備份成功時使用原始 Reply Token 回覆簡短成功訊息；設為 `false` 可暫停此回覆。群組附件不回覆，群組 `#筆記` 可回覆 |
 | `ENABLE_PUSH_FALLBACK` | `false` | 預設不補送。設為 `true` 時，只在 LINE 明確回覆 Reply Token 過期或無效、GAS 有回覆文字且有收件者時嘗試 Push；Push 可能計入 LINE 官方帳號訊息用量 |
 | `HMAC_DIAGNOSTIC_ENABLED` | `false` | 僅供一次性 `SIGNATURE_INVALID` 診斷；暫時與 GAS 同步設為 `true`，完成比對後立即改回 `false`，不會改變正式 HMAC 規則 |
 
@@ -78,4 +79,5 @@ Dashboard 的 Queue Consumers 應只看到這個 Worker。若部署說已有其�
 - 範例 consumer 的 `max_retries` 維持 `5`，並設定 `line-google-drive-backup-dlq`。主 Queue 超過最大重試次數後，訊息會進 DLQ；先依 errorCode 修正設定，再用 Dashboard 小量重送，不要在未修正前全部重送。
 - GAS 回 `JOB_IN_PROGRESS` 時，Worker 依 `retryAfterSeconds`（30 至 900 秒）呼叫 Queue retry，不 ACK。無效或缺少延遲時使用 60 秒；預設 600 秒租約會依當時剩餘時間加 5 秒，最高約 605 秒。
 - 所有指令都先進 Queue，Reply Token 可能在 GAS 完成前過期。若 `ENABLE_PUSH_FALLBACK=false`，失效只留下安全錯誤；若開啟 fallback，只有 LINE 明確判定 Token 無效才嘗試 Push。Reply 或 Push 失敗都不會重做已完成的備份，一般成功附件也不會主動 Push。
+- `ENABLE_BACKUP_SUCCESS_REPLY=true` 時，個人私訊的文字與附件完成備份後會使用原始 Reply API 回覆成功訊息；群組附件預設不回覆，`#筆記` 成功可回覆。這類成功回覆即使失敗也不會改用 Push 或重新執行備份。
 - 若遇到 GAS `SIGNATURE_INVALID`，只有在兩端同時暫時啟用 `HMAC_DIAGNOSTIC_ENABLED` 時才會記錄短指紋；比對 Worker／GAS 指紋後立即關閉開關並重新部署。不得把診斷 Log 貼到公開場所。

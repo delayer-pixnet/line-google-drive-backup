@@ -165,6 +165,7 @@ function parseGasResult(value: unknown, diagnosticEnabled: boolean): GasResult {
   const result: {
     ok: boolean;
     replyMessage?: string;
+    backupSuccessReply?: boolean;
     retryable?: boolean;
     errorCode?: string;
     retryAfterSeconds?: number;
@@ -172,6 +173,9 @@ function parseGasResult(value: unknown, diagnosticEnabled: boolean): GasResult {
   } = { ok: value.ok };
   if (typeof value.replyMessage === "string") {
     result.replyMessage = value.replyMessage.slice(0, 5000);
+  }
+  if (typeof value.backupSuccessReply === "boolean") {
+    result.backupSuccessReply = value.backupSuccessReply;
   }
   if (typeof value.retryable === "boolean") {
     result.retryable = value.retryable;

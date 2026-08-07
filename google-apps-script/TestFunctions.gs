@@ -90,6 +90,47 @@ function testEnvelopeHmacFixedVector() {
   console.log('Envelope HMAC UTF-8 固定向量測試通過。');
 }
 
+function testBackupSuccessReplyMessages() {
+  var cases = [
+    { messageType: 'text', expected: '✅ 文字已備份' },
+    { messageType: 'image', expected: '✅ 圖片已備份' },
+    { messageType: 'video', expected: '✅ 影片已備份' },
+    { messageType: 'audio', expected: '✅ 音訊已備份' },
+    { messageType: 'file', fileName: '報告:2026.pdf', expected: '✅ 檔案已備份：報告_2026.pdf' }
+  ];
+  cases.forEach(function (testCase) {
+    var job = {
+      command: null,
+      groupId: null,
+      messageType: testCase.messageType,
+      fileName: testCase.fileName || null
+    };
+    assertTest_(
+      getBackupSuccessReplyMessage_(job) === testCase.expected,
+      '個人 ' + testCase.messageType + ' 成功回覆不正確。'
+    );
+  });
+  assertTest_(
+    getBackupSuccessReplyMessage_({
+      command: null,
+      groupId: 'C-hashed-group',
+      messageType: 'image',
+      fileName: null
+    }) === null,
+    '群組附件成功預設不可回覆。'
+  );
+  assertTest_(
+    getBackupSuccessReplyMessage_({
+      command: 'note',
+      groupId: 'C-hashed-group',
+      messageType: 'text',
+      fileName: null
+    }) === '✅ 筆記已備份。',
+    '群組筆記成功應可回覆。'
+  );
+  console.log('備份成功 Reply 訊息測試通過。');
+}
+
 function enableHmacDiagnosticMode() {
   PropertiesService.getScriptProperties()
     .setProperty(APP_CONFIG_KEYS_.HMAC_DIAGNOSTIC_ENABLED, 'true');
