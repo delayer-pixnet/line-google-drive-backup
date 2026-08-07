@@ -14,6 +14,11 @@ export type CommandName =
   | "unbind"
   | "bindGroup"
   | "unbindGroup"
+  | "pendingApproval"
+  | "approve"
+  | "reject"
+  | "confirmApproveAll"
+  | "confirmRejectAll"
   | "note"
   | "help";
 

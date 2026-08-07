@@ -23,6 +23,9 @@
 | 需要讓失敗綁定重新授權 | 測試部署期 OAuth Service 內仍保留失敗授權 Token | 管理者暫設 `BINDING_RECOVERY_LINE_USER_HASH` 為 64 位雜湊，手動執行 `clearOAuthTokenForRecoveryLineUserHash`；執行後 Property 會自動刪除，未完成 BindingSessions 會標示 `FAILED` | 該使用者可用新的綁定流程重新授權；不刪 Users、Groups、Invitations 或 Drive 檔案 |
 | OAuth 取消或初始化失敗但邀請次數減少 | 使用舊版流程或 Invitations 被人工修改 | 更新至目前版本並核對 BindingSessions；目前只在資源與 Users 備妥後的最後受鎖階段增加 UsedCount | 取消／初始化失敗不扣次數，完成只扣 1 次 |
 | 私訊附件說未綁定 | Users disabled 或 OAuth Token 已撤銷 | 私訊 `狀態`，重新用新邀請碼綁定 | Users Enabled=true |
+| 自助綁定後無法備份 | Users 的 `ApprovalStatus=PENDING_APPROVAL` 或 `REJECTED` | 請管理者用「待審核」取得安全化代號，再私訊 Bot 輸入「核准 <編號>」；核准前內容不會保存 | Users 為 `APPROVED` 且 `Enabled=true` |
+| 管理者指令被拒絕 | `ADMIN_LINE_USER_HASHES` 未包含指令者的 64 位雜湊，或設定格式錯誤 | 只核對管理 Sheet 的 `LineUserHash` 雜湊，不要輸入或記錄原始 LINE userId | 「待審核」可列出安全化代號 |
+| 批次審核確認失敗 | 確認碼過期、已使用、操作類型不符或由其他管理者輸入 | 重新輸入 `核准全部`／`拒絕全部` 取得新確認碼，並由同一管理者在 5 分鐘內輸入對應確認指令 | 回覆「確認碼無效、已過期或不屬於目前管理者」 |
 | 附件下載 401／404 | LINE Token 錯、messageId 已失效 | 更新 GAS `LINE_CHANNEL_ACCESS_TOKEN`；不要重用很舊事件 | 新附件可下載 |
 | 大檔經常逾時 | Apps Script 記憶體／執行時間或網路 | Worker 與 GAS 預設維持 20 MiB；45 MiB 屬高風險且不保證成功 | 小檔穩定完成 |
 | Drive 建檔但 Sheet 無列 | Sheets API／配額在上傳後失敗 | Jobs 應保留 DriveFileId；修復 API 後讓 FAILED 工作重試 | 重用檔案 ID，不重複上傳 |

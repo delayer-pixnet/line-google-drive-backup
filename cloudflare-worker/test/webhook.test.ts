@@ -190,6 +190,26 @@ describe("LINE Webhook", () => {
     expect(bindToken).not.toContain(lineUserId);
   });
 
+  it("沒有邀請碼的綁定仍會產生短效 OAuth Bind Token", async () => {
+    const sentJobs: QueueJob[] = [];
+    const body = JSON.stringify({
+      events: [{
+        type: "message",
+        webhookEventId: "evt-self-service-bind",
+        timestamp: 1_785_456_000_000,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U-self-service" },
+        message: { type: "text", id: "msg-self-service-bind", text: "綁定" },
+      }],
+    });
+
+    await handleRequest(await signedRequest(body), createEnv(sentJobs));
+
+    expect(sentJobs[0]?.command).toBe("bind");
+    expect(sentJobs[0]?.bindToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+    expect(sentJobs[0]?.bindToken).not.toContain("U-self-service");
+  });
+
   it("Bind Token 金鑰輪替不改變識別雜湊，識別金鑰輪替才會改變", async () => {
     const lineUserId = "U1234567890abcdef";
     const body = JSON.stringify({

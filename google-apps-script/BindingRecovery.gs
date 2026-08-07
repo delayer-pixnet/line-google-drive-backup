@@ -26,7 +26,7 @@ function provisionAuthorizedBinding_(lineUserHash, session) {
       disableGroupsOwnedBy_(lineUserHash);
     }
 
-    completeBindingSession_(lineUserHash, provisioningSession.SessionNonceHash, {
+    var approvalStatus = completeBindingSession_(lineUserHash, provisioningSession.SessionNonceHash, {
       lineUserHash: lineUserHash,
       googleSubjectId: profile.sub,
       googleEmail: profile.email,
@@ -35,7 +35,7 @@ function provisionAuthorizedBinding_(lineUserHash, session) {
       groupFolderId: resources.groupFolderId,
       sheetId: resources.sheetId
     });
-    return { completed: true };
+    return { completed: true, approvalStatus: approvalStatus };
   } catch (error) {
     var appError = isAppError_(error)
       ? error

@@ -24,23 +24,24 @@ npm run build
 | W06 | 綁定 Token 正常、過期、竄改與內容 | 只有有效 Token 可解析，payload 不含原始 LINE userId |
 | W07 | webhook 轉 Queue job | 必填中繼欄位一致，無二進位內容 |
 | W08 | 預設 20 MiB 上限 | 等於上限通過，多 1 byte 拒絕 |
-| W09 | 7 個指定文字指令 | 名稱與參數正確 |
-| W10 | `#標籤` 與網址 | 去重、移除句尾標點、排除控制標籤 |
-| W11 | 安全 Log | 只輸出白名單欄位，不含測試 Secret |
-| W12 | 群組文字規則 | 一般聊天忽略，mention 建立工作 |
-| W13 | GAS client 正常 JSON 與無效 JSON | 正常回應解析；非 JSON 回 `GAS_INVALID_RESPONSE` |
-| W14 | GAS HTTP 500／400 | 500 標示 retryable；400 標示 non-retryable |
-| W15 | LINE Reply／Push 成功與失敗 | 成功完成；非 2xx 回安全錯誤，且一般 400／Channel Token 401 不誤判為 Reply Token 無效 |
-| W16 | Queue retry／ack | retryable 呼叫 retry；non-retryable 呼叫 ack |
-| W17 | 備份完成但 Reply Token 失效 | fallback 關閉時只 ack；開啟時 Push 成功或失敗都不再次呼叫 GAS、retry 或重做備份 |
-| W18 | 重複工作 | GAS 回傳已處理時 ack，不重複上傳 |
-| W19 | 安全 Log 敏感欄位 | Secret、Token、原始文字與 LINE 識別碼都不出現在 Log |
-| W20 | 永久識別雜湊金鑰分離 | 輪替 `BIND_TOKEN_SECRET` 不改變 lineUserHash；輪替 `IDENTIFIER_HASH_SECRET` 才會改變 |
-| W21 | 一般成功附件 | GAS 沒有 `replyMessage` 時，即使 fallback 開啟也不呼叫 Push API |
-| W22 | GAS `retryAfterSeconds` 解析 | 30、605、900 接受；29、901、非整數與字串忽略 |
-| W23 | PROCESSING 有效租約 | `JOB_IN_PROGRESS` 使用 GAS 指定延遲呼叫 retry，絕不 ack |
-| W24 | 無效租約延遲 | 回退 60 秒 retry，不 ack |
-| W25 | 原處理程序稍後完成 | 第一次延後，後續 GAS 回 COMPLETED／`ok=true` 時正常 ack |
+| W09 | 指定文字指令與管理者審核指令 | 名稱與參數正確，未授權管理者命令由 GAS 拒絕 |
+| W10 | 多筆／整批審核指令解析 | `核准 1,2,3`、`拒絕 1,2,3`、`核准全部`、確認指令解析正確 |
+| W11 | `#標籤` 與網址 | 去重、移除句尾標點、排除控制標籤 |
+| W12 | 安全 Log | 只輸出白名單欄位，不含測試 Secret |
+| W13 | 群組文字規則 | 一般聊天忽略，mention 建立工作 |
+| W14 | GAS client 正常 JSON 與無效 JSON | 正常回應解析；非 JSON 回 `GAS_INVALID_RESPONSE` |
+| W15 | GAS HTTP 500／400 | 500 標示 retryable；400 標示 non-retryable |
+| W16 | LINE Reply／Push 成功與失敗 | 成功完成；非 2xx 回安全錯誤，且一般 400／Channel Token 401 不誤判為 Reply Token 無效 |
+| W17 | Queue retry／ack | retryable 呼叫 retry；non-retryable 呼叫 ack |
+| W18 | 備份完成但 Reply Token 失效 | fallback 關閉時只 ack；開啟時 Push 成功或失敗都不再次呼叫 GAS、retry 或重做備份 |
+| W19 | 重複工作 | GAS 回傳已處理時 ack，不重複上傳 |
+| W20 | 安全 Log 敏感欄位 | Secret、Token、原始文字與 LINE 識別碼都不出現在 Log |
+| W21 | 永久識別雜湊金鑰分離 | 輪替 `BIND_TOKEN_SECRET` 不改變 lineUserHash；輪替 `IDENTIFIER_HASH_SECRET` 才會改變 |
+| W22 | 一般成功附件 | GAS 沒有 `replyMessage` 時，即使 fallback 開啟也不呼叫 Push API |
+| W23 | GAS `retryAfterSeconds` 解析 | 30、605、900 接受；29、901、非整數與字串忽略 |
+| W24 | PROCESSING 有效租約 | `JOB_IN_PROGRESS` 使用 GAS 指定延遲呼叫 retry，絕不 ack |
+| W25 | 無效租約延遲 | 回退 60 秒 retry，不 ack |
+| W26 | 原處理程序稍後完成 | 第一次延後，後續 GAS 回 COMPLETED／`ok=true` 時正常 ack |
 
 Vitest 預期顯示所有 test files 與 tests passed；coverage 是風險參考，不設置虛假的 100% 門檻。
 
@@ -74,6 +75,11 @@ Vitest 預期顯示所有 test files 與 tests passed；coverage 是風險參考
 | `testBindingSessionInvitationConsumption` | 邀請碼延後扣次 | PENDING／AUTHORIZED 不扣次，最後完成後扣 1 次，重送仍維持 1 次 |
 | `testAuthorizedBindingFailureIsRecoverable` | 授權後初始化失敗 | Session 保留為可恢復狀態、邀請不扣次，並可重新進入 PROVISIONING |
 | `testBindingProvisioningReusesResources` | 綁定資源初始化冪等 | 同一使用者連續初始化會重用相同資料夾與 Sheet ID |
+| `testSelfServiceApprovalHelpers` | 自助綁定與審核狀態 | 新使用者為 PENDING_APPROVAL，既有邀請碼與已核准使用者不被降級 |
+| `testAdminApprovalSafetyHelpers` | 管理者白名單與安全化代號 | 只有設定的 lineUserHash 可視為管理者；審核代號不含原始識別 |
+| `testBatchApprovalHelpers` | 多筆審核與重複處理 | `1,2,3` 只處理目前 PENDING／停用使用者，已核准／已拒絕會略過 |
+| `testApprovalConfirmationExpiry` | 整批確認碼 | 確認碼 5 分鐘期限、管理者綁定與操作綁定正確 |
+| `testApprovalConfirmationFlow` | 整批確認流程 | 同一管理者第一次確認成功，重送同一確認碼遭拒絕 |
 
 `testCreateUserDriveRootFolder`、`testCreatePersonalBackupSheet` 與 `testBindingProvisioningReusesResources` 會使用自己的 Google 授權並可能真的建立或重用 Drive／Sheet 資源，但不呼叫朋友帳號或正式 LINE API。先把自己的 Users `LineUserHash` 暫時設成 Script Property `TEST_LINE_USER_HASH`；確認冪等測試的兩次回傳 ID 相同。前 2 項會建立名稱含「手動測試」的資源；冪等測試可能重用標準「LINE 自動備份」資源，不可把它當成測試垃圾刪除。測試後只刪除明確標示的測試資源與該 Property。
 
@@ -100,5 +106,8 @@ Jobs、邀請與 BindingSession 手動測試會在管理 Sheet 寫入以 `manual
 | E15 | 模擬 OAuth 成功後初始化暫時失敗，再執行管理恢復 | OAuth Token 與部分資源保留；`resumeAuthorizedBinding` 重用資源，完成後邀請只扣 1 次 |
 | E16 | 測試環境讓指令 Reply Token 明確失效 | fallback 關閉時不 Push；開啟時只嘗試 1 次 Push，Push 失敗不重做備份 |
 | E17 | 模擬 Worker timeout 後同一工作重送 | 有效租約回 `JOB_IN_PROGRESS` 且 Queue 不 ACK；原程序完成則後續 ACK，中止則租約過期後重取 |
+| E18 | 自助綁定與管理者核准 | 私訊 `綁定` 取得連結；OAuth 完成後 Users 為 `PENDING_APPROVAL`／停用，管理者以 `待審核`、`核准 <編號>` 後才可備份 |
+| E19 | 多筆審核 | 管理者輸入 `核准 1,2,3` 或 `拒絕 1,2,3`，回覆成功／略過／失敗筆數 |
+| E20 | 整批審核二次確認 | `核准全部`／`拒絕全部` 先回數量與確認碼；只有同一管理者在 5 分鐘內輸入正確確認指令才執行 |
 
 驗收時只用無敏感內容的小型測試檔。預設先以 20 MiB 以下檔案驗收；若管理者刻意提高到 45 MiB，該壓力測試應放在最後，且結果不保證成功，需同時觀察 Apps Script Executions 與 Queue DLQ。

@@ -13,12 +13,50 @@ var APP_CONFIG_KEYS_ = Object.freeze({
   ERROR_RETENTION_DAYS: 'ERROR_RETENTION_DAYS',
   COMPLETED_JOB_RETENTION_DAYS: 'COMPLETED_JOB_RETENTION_DAYS',
   JOB_PROCESSING_LEASE_SECONDS: 'JOB_PROCESSING_LEASE_SECONDS',
-  HMAC_DIAGNOSTIC_ENABLED: 'HMAC_DIAGNOSTIC_ENABLED'
+  HMAC_DIAGNOSTIC_ENABLED: 'HMAC_DIAGNOSTIC_ENABLED',
+  ADMIN_LINE_USER_HASHES: 'ADMIN_LINE_USER_HASHES',
+  ENABLE_SELF_SERVICE_BINDING: 'ENABLE_SELF_SERVICE_BINDING',
+  REQUIRE_ADMIN_APPROVAL: 'REQUIRE_ADMIN_APPROVAL'
 });
 
 function isHmacDiagnosticEnabled_() {
   return PropertiesService.getScriptProperties()
     .getProperty(APP_CONFIG_KEYS_.HMAC_DIAGNOSTIC_ENABLED) === 'true';
+}
+
+function isSelfServiceBindingEnabled_() {
+  return PropertiesService.getScriptProperties()
+    .getProperty(APP_CONFIG_KEYS_.ENABLE_SELF_SERVICE_BINDING) === 'true';
+}
+
+function isAdminApprovalRequired_() {
+  var value = PropertiesService.getScriptProperties()
+    .getProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL);
+  return value !== 'false';
+}
+
+function getAdminLineUserHashes_() {
+  var rawValue = PropertiesService.getScriptProperties()
+    .getProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES) || '';
+  if (!rawValue.trim()) {
+    return [];
+  }
+  var hashes = rawValue.split(',').map(function (value) { return value.trim().toLowerCase(); });
+  if (hashes.some(function (value) { return !/^[a-f0-9]{64}$/.test(value); })) {
+    throw createAppError_('CONFIG_INVALID_ADMIN_USERS', false, '管理者設定格式無效。');
+  }
+  return hashes.filter(function (value, index) { return hashes.indexOf(value) === index; });
+}
+
+function isAdminLineUserHash_(lineUserHash) {
+  return isAdminLineUserHashConfigured_(lineUserHash, getAdminLineUserHashes_());
+}
+
+function isAdminLineUserHashConfigured_(lineUserHash, configuredHashes) {
+  return typeof lineUserHash === 'string' &&
+    /^[a-f0-9]{64}$/.test(lineUserHash) &&
+    Array.isArray(configuredHashes) &&
+    configuredHashes.indexOf(lineUserHash) >= 0;
 }
 
 function getRequiredProperty_(name) {

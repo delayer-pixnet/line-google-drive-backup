@@ -5,6 +5,7 @@ const EXACT_COMMANDS: Readonly<Record<string, ParsedCommand["name"]>> = {
   "解除綁定": "unbind",
   "綁定群組": "bindGroup",
   "解除群組": "unbindGroup",
+  "待審核": "pendingApproval",
   "說明": "help",
 };
 
@@ -14,8 +15,26 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (exactCommand !== undefined) {
     return { name: exactCommand, argument: "" };
   }
+  if (/^確認核准全部(?:\s|$)/u.test(normalized)) {
+    return { name: "confirmApproveAll", argument: normalized.replace(/^確認核准全部\s*/u, "") };
+  }
+  if (/^確認拒絕全部(?:\s|$)/u.test(normalized)) {
+    return { name: "confirmRejectAll", argument: normalized.replace(/^確認拒絕全部\s*/u, "") };
+  }
+  if (/^核准全部(?:\s|$)/u.test(normalized)) {
+    return { name: "approve", argument: "全部" };
+  }
+  if (/^拒絕全部(?:\s|$)/u.test(normalized)) {
+    return { name: "reject", argument: "全部" };
+  }
   if (/^綁定(?:\s|$)/u.test(normalized)) {
     return { name: "bind", argument: normalized.slice(2).trim() };
+  }
+  if (/^核准(?:\s|$)/u.test(normalized)) {
+    return { name: "approve", argument: normalized.slice(2).trim() };
+  }
+  if (/^拒絕(?:\s|$)/u.test(normalized)) {
+    return { name: "reject", argument: normalized.slice(2).trim() };
   }
   if (/^#筆記(?:\s|$)/u.test(normalized)) {
     return { name: "note", argument: normalized.slice(3).trim() };

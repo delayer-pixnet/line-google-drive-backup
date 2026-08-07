@@ -46,16 +46,17 @@ Cloudflare Queue 只含 JSON 中繼資料，不含附件 bytes。附件只在一
 
 ## OAuth 設計
 
-1. 使用者私訊 `綁定 <邀請碼>`。
-2. GAS 驗證 Invitations 的 `Enabled`、`MaxUses`、`UsedCount` 與 `ExpiresAt`，但此時不增加使用次數；只建立以 Token nonce 關聯的 PENDING BindingSession，工作表只保存 nonce、使用者與邀請碼雜湊。
+1. 使用者私訊 `綁定 <邀請碼>`，或在 `ENABLE_SELF_SERVICE_BINDING=true` 時私訊不帶邀請碼的 `綁定`。
+2. 邀請碼流程驗證 Invitations 的 `Enabled`、`MaxUses`、`UsedCount` 與 `ExpiresAt`，但此時不增加使用次數；自助流程不保存邀請碼。兩者都只建立以 Token nonce 關聯的 PENDING BindingSession，工作表只保存 nonce、使用者與邀請碼雜湊。
 3. GAS 回覆短效綁定 URL。`doGet?route=bind&token=...` 只驗證 Token 與 PENDING session，不消耗 nonce，因此重新整理頁面仍可繼續。
 4. Apps Script OAuth2 Library 建立 `LineUser_<LineUserHash>` Service，Property Store、Cache 與 Lock 都使用 script scope。
 5. `getAuthorizationUrl()` 把 `lineUserHash`、`bindNonce` 與 `expiresAt` 放入 OAuth2 Library 加密的 state；不放入原始 LINE userId 或邀請碼。
 6. `oauthCallback` 重新驗證 state 格式、期限與 BindingSession，再呼叫 `handleCallback`。取消不消耗 nonce、不增加邀請使用次數。
 7. `handleCallback` 成功後保留 OAuth Token，Session 先進入 AUTHORIZED 並保留邀請名額，再以 10 分鐘 PROVISIONING 租約初始化資源；初始化失敗轉為 FAILED，不 reset Token，也不扣邀請次數。
 8. 根目錄、個人／群組目錄與備份 Sheet 都以 `IDENTIFIER_HASH_SECRET` 衍生的穩定 `lineBackupResourceKey` 寫入 Drive appProperties。重試會查詢並補齊同一組資源，不以名稱作唯一判斷。
-9. 資源準備完成後，GAS 才在 Script Lock 內以單一 Sheets API `values.batchUpdate` 原子寫入 Users Enabled、增加 `UsedCount`、把 Session 設為 COMPLETED 並消耗 bind nonce。COMPLETED callback 重送會遭拒絕。
+9. 資源準備完成後，GAS 才在 Script Lock 內以單一 Sheets API `values.batchUpdate` 原子寫入 Users `ApprovalStatus`／`Enabled`、（僅邀請碼流程）增加 `UsedCount`、把 Session 設為 COMPLETED 並消耗 bind nonce。COMPLETED callback 重送會遭拒絕；自助流程在管理者核准前保持 `PENDING_APPROVAL`／`Enabled=false`。
 10. 管理者可暫設 `BINDING_RECOVERY_LINE_USER_HASH` 後手動執行 `resumeAuthorizedBinding()`，恢復 AUTHORIZED、FAILED 或租約已過期的 PROVISIONING；暫存 Property 會在函式結束時刪除。
+11. 啟用 `ENABLE_SELF_SERVICE_BINDING=true` 後，私訊「綁定」可不使用邀請碼建立 BindingSession；OAuth 與資源初始化完成後，Users 先寫入 `PENDING_APPROVAL`／`Enabled=false`。只有 `ADMIN_LINE_USER_HASHES` 內的管理者可用「待審核／核准／拒絕」更新審核狀態，也可用逗號編號批次處理；「核准全部／拒絕全部」必須以同一管理者的 5 分鐘確認碼二次確認。未核准帳號不會進入備份流程。
 
 OAuth scope 固定為 `openid email profile https://www.googleapis.com/auth/drive.file`，並使用 `access_type=offline` 與 `prompt=consent` 取得 Refresh Token。`drive.file` 也可授權 Sheets API 存取由此應用程式建立的試算表，因此不要求廣泛的全 Drive 權限。
 

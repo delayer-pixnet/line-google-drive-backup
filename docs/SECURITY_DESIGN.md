@@ -33,6 +33,8 @@ Worker 與 GAS 都以不因第一個不相符字元而提前返回的比較函�
 - 使用者送出邀請碼時只驗證有效性，不增加 `UsedCount`。GAS 建立以 Bind Token nonce 關聯的 `BindingSessions` 列，工作表只保存 session nonce、LINE 使用者與邀請碼的 HMAC。
 - OAuth 成功後 Session 進入 AUTHORIZED 並保留一個邀請名額，再以 PROVISIONING 租約初始化。失敗轉為 FAILED，OAuth Token 與名額保留，管理者可執行恢復。
 - 資源準備完成後，GAS 才以單一 Sheets API `values.batchUpdate` 原子更新 Users Enabled、`UsedCount`、Session COMPLETED 與已使用 nonce，避免部分寫入後重送造成重複扣次。
+- 自助綁定不保存邀請碼；Session 的 `InviteCodeHash` 留空。資源與 Users 初始化完成後，若 `REQUIRE_ADMIN_APPROVAL=true`，只寫入 `ApprovalStatus=PENDING_APPROVAL` 與 `Enabled=false`。管理者身分以 `ADMIN_LINE_USER_HASHES` 的永久雜湊比對，審核清單只顯示由雜湊前綴產生的安全化代號，不顯示原始 LINE userId 或 Google Email。
+- 批次審核只接受目前 `PENDING_APPROVAL` 且 `Enabled=false` 的 Users；逗號編號依目前待審核清單的 1-based 順序解析。整批操作的確認碼只保存雜湊、操作類型、期限，並以管理者 `lineUserHash` 分隔的 Script Property 保存；確認碼 5 分鐘後失效，成功消耗後立即刪除，不寫入 Log 或工作表。
 - 使用者取消 Google OAuth、初始化失敗或 callback 重送時，不會重複扣除邀請次數。AUTHORIZED 後即使原邀請期限到達，仍可在邀請未停用且額度未被耗盡時完成保留的工作階段。
 
 ## 最小權限與 Token

@@ -36,6 +36,9 @@
 | `COMPLETED_JOB_RETENTION_DAYS` | 正整數天數，預設 `90`，允許 1 至 3650 | 否 | 範例可、正式設定不提交 | 未設定時用 90 天；格式無效時清理函式拒絕執行 |
 | `JOB_PROCESSING_LEASE_SECONDS` | 正整數秒數，預設 `600`，允許 60 至 3600 | 否 | 範例可、正式設定不提交 | 未設定時用 600 秒；過短會造成尚在處理的工作被重取，格式無效時拒絕處理 |
 | `HMAC_DIAGNOSTIC_ENABLED` | `false`；只在定位 `SIGNATURE_INVALID` 時與 Worker 暫時同步設為 `true` | 否 | 範例可、正式設定不提交 | 未設定或非 `true` 時不輸出任何診斷指紋；完成比對後應立即改回 `false` |
+| `ADMIN_LINE_USER_HASHES` | 逗號分隔的 64 位小寫 `lineUserHash`；只填管理者，不填原始 LINE userId | 敏感設定 | 否 | 格式錯誤時管理者指令會被拒絕 |
+| `ENABLE_SELF_SERVICE_BINDING` | `true` 或 `false`；`true` 允許私訊輸入「綁定」直接取得 OAuth 連結 | 否 | 範例可、正式設定不提交 | `false` 時仍只能使用「綁定 <邀請碼>」 |
+| `REQUIRE_ADMIN_APPROVAL` | 建議 `true`；自助 OAuth 完成後先建立 `PENDING_APPROVAL` 且停用備份 | 否 | 範例可、正式設定不提交 | `true` 時未核准帳號不可備份或綁定群組 |
 
 `script-properties.example.json` 列出完整範例名稱，可用來逐項核對，但不可直接填入真實值後提交。`WORKER_GAS_SHARED_SECRET`、`BIND_TOKEN_SECRET` 與 `IDENTIFIER_HASH_SECRET` 必須三者不同。可用密碼管理器產生高熵值；不要把產生指令輸出貼入文件或終端紀錄截圖。
 
@@ -45,19 +48,22 @@
 
 `IDENTIFIER_HASH_SECRET` 是永久資料關聯的一部分。首次正式上線後不可直接更換；它同時影響 Users、Groups、Invitations、Nonces、BindingSessions、OAuth Service 名稱與 Drive `lineBackupEventKey`。若日後確實需要輪替，必須另行設計資料與 Token 遷移，不能只替換 Property。
 
+自助綁定啟用後，管理者可在私訊使用 `待審核`、`核准 <編號[,編號]>`、`拒絕 <編號[,編號]>`。`核准全部`／`拒絕全部` 會先產生 5 分鐘確認碼；只有同一管理者輸入對應的確認指令才會執行，確認碼消耗後不可重用。批次只處理 `PENDING_APPROVAL` 且 `Enabled=false` 的 Users。
+
 輪替 `BIND_TOKEN_SECRET` 只會讓尚未完成的舊 Bind Token 失效，不會改變既有 lineUserHash；輪替 `WORKER_GAS_SHARED_SECRET` 只影響 Worker envelope 驗證。兩端更新金鑰時仍應安排一致的切換時點，避免短暫驗證失敗。
 
 ## 4. 初始化管理工作表
 
 1. 在編輯器選 `initializeAdminSpreadsheet` 並按 Run。
 2. 第一次執行會要求管理者授權 Apps Script 存取管理 Sheet 與外部請求；檢查權限後允許。
-3. 預期管理 Sheet 時區設為 `Asia/Taipei`，並出現 Users、Groups、Invitations、Jobs、Nonces、BindingSessions、Errors，共 7 個工作表；第一列凍結並符合欄位名稱。Jobs 必須包含 `LeaseExpiresAt`；BindingSessions 必須包含 `UpdatedAt` 與 `FailureCode`。
+3. 預期管理 Sheet 時區設為 `Asia/Taipei`，並出現 Users、Groups、Invitations、Jobs、Nonces、BindingSessions、Errors，共 7 個工作表；第一列凍結並符合欄位名稱。Users 最後一欄為 `ApprovalStatus`；Jobs 必須包含 `LeaseExpiresAt`；BindingSessions 必須包含 `UpdatedAt` 與 `FailureCode`。舊版 Users 10 欄會由程式在保留資料的前提下補上最後一欄。
 4. 若顯示 `ADMIN_HEADERS_MISMATCH`，不要直接覆蓋；先確認是否使用舊版本管理表並備份資料。
 
 本版新增或需特別核對的完整欄位順序：
 
 - Jobs：`WebhookEventId`、`MessageId`、`Status`、`RetryCount`、`LeaseExpiresAt`、`DriveFileId`、`ErrorCode`、`ErrorMessage`、`CreatedAt`、`UpdatedAt`。
 - BindingSessions：`SessionNonceHash`、`LineUserHash`、`InviteCodeHash`、`ExpiresAt`、`UsedAt`、`Status`、`CreatedAt`、`UpdatedAt`、`FailureCode`。
+- Users：`LineUserHash`、`GoogleSubjectId`、`GoogleEmail`、`RootFolderId`、`PersonalFolderId`、`GroupFolderId`、`SheetId`、`Enabled`、`CreatedAt`、`UpdatedAt`、`ApprovalStatus`。
 
 不要手動插入、改名或搬動欄位。Job 進入 `PROCESSING` 時 `LeaseExpiresAt` 應有值；完成、失敗或拒絕後會清空。下載完成、Drive 上傳完成及寫入 Sheet 前後會延長租約。
 

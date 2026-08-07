@@ -1,8 +1,8 @@
 # 專案狀態
 
-最後更新：2026-08-06
+最後更新：2026-08-07
 
-目前為完成一次性 HMAC 診斷模式的 MVP。GAS 程式已同步並更新既有 Web App deployment；Worker 已完成本輪部署，未設定 LINE Webhook，也未 Commit 或 Push。
+目前已加入可選的「自助綁定 + 管理者審核」流程。GAS 程式已同步並更新既有 Web App 至 `@11`；Worker 已部署本輪版本。本輪完成驗證後建立穩定版本 Commit 並 Push 至 `main`。
 
 ## 已完成
 
@@ -17,20 +17,23 @@
 - 預設單檔上限為 20 MiB；45 MiB 已在設定與操作文件標示為高風險且不保證成功。
 - `cleanupExpiredAdminRecords` 只清除過期 Nonces、已過期的 PENDING／COMPLETED BindingSessions、逾期 Errors 與逾期 COMPLETED Jobs；不刪除可恢復 Session、PROCESSING Jobs、Users、Groups、Invitations 或 Drive 檔案。
 - 已同步架構、資料流、安全設計、設定範例、LINE／Google／Cloudflare 操作、朋友指南、測試案例、成本配額、故障排除與部署文件。
+- 自助綁定可在不輸入邀請碼時建立短效 OAuth 連結；授權與 Drive 初始化完成後，若 `REQUIRE_ADMIN_APPROVAL=true`，Users 會先寫入 `PENDING_APPROVAL`／`Enabled=false`。管理者以 `ADMIN_LINE_USER_HASHES` 白名單執行 `待審核`、`核准 <編號>`、`拒絕 <編號>`；既有 `綁定 <邀請碼>` 流程仍直接核准並保留原有邀請次數規則。
+- 未核准且已有 Users 記錄的使用者不會備份私訊內容或群組內容；管理者核准後才可備份及執行 `綁定群組`。Users 新增的 `ApprovalStatus` 會附加在最後一欄，舊版 10 欄資料會安全補欄，不重排既有資料。
+- 管理者審核支援 `核准／拒絕 1,2,3` 指定多筆，以及 `核准全部`／`拒絕全部` 的 5 分鐘同管理者二次確認；結果回覆成功、略過與失敗筆數，已核准／已拒絕資料不會重複處理。確認碼只保存雜湊並在成功消耗後刪除。
 
 ## 本機驗證
 
 - `npm run typecheck`：成功，TypeScript strict 無錯誤。
 - `npm run lint`：成功，ESLint 無錯誤。
-- `npm test`：成功，7 個 test files、61 個 tests 全部通過。
-- Coverage：statements 88.01%、branches 83.95%、functions 94.64%、lines 88.05%。`gas-client.ts`、`line-client.ts` 與診斷 Log 分支均有測試。
-- `npm run build`：成功，Wrangler dry-run bundle 25.16 KiB、gzip 6.68 KiB；正式部署於本輪驗證後執行。
+- `npm test`：成功，7 個 test files、86 個 tests 全部通過；測試涵蓋自助綁定、單筆／多筆／整批審核命令解析與既有邀請碼相容性。
+- Coverage：statements 89.35%、branches 85.20%、functions 95%、lines 89.41%。`gas-client.ts`、`line-client.ts`、Queue retry／ack 與審核命令解析分支均有測試。
+- `npm run build`：成功，Wrangler dry-run bundle 30.13 KiB、gzip 7.62 KiB；正式部署於本輪驗證後執行。
 - `npm audit --audit-level=high`：成功，0 個已知漏洞。
 - GAS 語法：17 個 `.gs` 以 Node.js `vm.Script` UTF-8 parser 全部通過。
 - JSON／JSONC：`appsscript.json`、`script-properties.example.json`、`package.json`、`package-lock.json`、`.clasp.json.example` 解析成功；`wrangler.jsonc.example` 的格式、`GAS_REQUEST_TIMEOUT_MS=55000`、`max_retries >= 5` 與 DLQ 設定均驗證成功。
 - Secret 掃描：10 類高風險憑證格式為 0 命中；Repository 內沒有正式 `.env`、`.dev.vars`、`wrangler.jsonc`、`.clasp.json` 或 `.clasprc.json`。
 - 文件：19 份 Markdown 的相對連結檢查通過；已補充一次性 HMAC 診斷開關與關閉流程。
-- Git：目前分支為 `main`，Repository 尚無 Commit，67 個交付檔案全部為 untracked；`git diff` 因無已追蹤基準而沒有輸出。本次未 Commit、未 Push。
+- Git：本輪不建立 Commit、不 Push；保留既有 `main` 分支與工作區中使用者原有的 untracked 檔案。
 
 Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No bindings found`；正式人工測試部署時才會複製 `wrangler.jsonc.example` 為被忽略的 `wrangler.jsonc`，由 Wrangler 載入 Queue bindings。Vitest 與 Wrangler 在 Windows 沙箱內因暫存檔／診斷 Log 權限遇到 `EPERM`，改在獲准的沙箱外執行後均通過。
 
@@ -43,4 +46,4 @@ Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No
 
 ## 部署判斷
 
-本輪 Worker 部署版本已通過 `/health` HTTP 200 安全回應驗證；GAS Web App deployment 已更新至版本 3。`HMAC_DIAGNOSTIC_ENABLED` 目前為受控診斷用途暫時啟用，完成一次 LINE「說明」測試並收集必要短指紋後，必須在 GAS 與 Worker 同步改回 `false` 並重新更新／部署。尚未設定 LINE Webhook，也未開始朋友邀請流程；正式提供朋友使用前仍須依 `FIRST_TIME_SETUP.md` 完成人工端對端驗證。
+自助綁定功能已完成本輪驗證、GAS 同步、Web App 更新與 Worker 部署，具備測試部署條件。Worker `/health` 已回 HTTP 200 且只回 `{"status":"ok"}`；本輪部署版本為 `6c9c0814-a94a-4a50-9644-5b10c4d41a06`。`HMAC_DIAGNOSTIC_ENABLED` 維持 `false`；`ENABLE_SELF_SERVICE_BINDING`、`REQUIRE_ADMIN_APPROVAL` 與 `ADMIN_LINE_USER_HASHES` 仍須由管理者依文件自行設定，未在本輪寫入真實識別或 Secret。尚未在本輪替使用者建立邀請碼，也不會修改既有 Secret。

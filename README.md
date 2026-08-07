@@ -1,6 +1,6 @@
 # 私人多人共用 LINE Google Drive 備份 Bot
 
-這是一套可自行部署的邀請制 MVP。所有人共用同一個 LINE Bot，但每位使用者以自己的 Google OAuth Token，把私訊附件存入自己的 Google Drive，並把文字、網址與標籤寫入自己的 Google Sheet。一般群組由一位已綁定使用者擔任備份擁有者。
+這是一套可自行部署的私人多人共用 MVP。所有人共用同一個 LINE Bot，但每位使用者以自己的 Google OAuth Token，把私訊附件存入自己的 Google Drive，並把文字、網址與標籤寫入自己的 Google Sheet。一般群組由一位已核准使用者擔任備份擁有者；可選擇使用自助綁定後由管理者審核，或保留邀請碼流程。
 
 > 本專案不支援 LINE 社群、公開註冊、AI、OCR 或付費會員。請勿提交任何真實 Secret 或正式 URL。
 
@@ -12,13 +12,13 @@
 4. 複製 `.clasp.json.example` 為 `.clasp.json`，依 [Google Apps Script 設定](docs/GOOGLE_APPS_SCRIPT_SETUP.md) 加入 OAuth2 Library、Script Properties 並部署 Web App。
 5. 依 [部署流程](docs/DEPLOYMENT.md) 串接 Worker webhook，完成 LINE Verify 後先測試自己的帳號。
 
-本次產出不會自動部署、建立遠端資源、執行 OAuth 同意或 Push Git。
+本專案不會在一般程式修改時自動部署、建立遠端資源或執行 OAuth 同意；每次外部操作都必須由管理者明確手動執行。本輪依明確授權完成 GAS Web App 與 Worker 更新，但未修改 Secret、未建立邀請碼；完成驗證後建立自助綁定與管理者審核流程的穩定版本 Commit 並 Push 至 `main`。
 
 ## 功能摘要
 
 - 私訊：圖片、影片、音訊與一般檔案進入自己的 Drive；一般文字與網址進入自己的備份 Sheet。
 - 群組：附件進入群組擁有者的 Drive；文字只在提及 Bot、使用 `#筆記` 或指定指令時處理。
-- 指令：`綁定 <邀請碼>`、`狀態`、`解除綁定`、`綁定群組`、`解除群組`、`#筆記 <內容>`、`說明`。
+- 指令：`綁定`（自助申請）、`綁定 <邀請碼>`、`狀態`、`解除綁定`、`綁定群組`、`解除群組`、`#筆記 <內容>`、`說明`；管理者另有 `待審核`、`核准／拒絕 <編號[,編號]>`、`核准／拒絕 全部`（需二次確認）。
 - 防護：LINE 原始 Body 簽章、Worker→GAS HMAC、防重播、工作租約、Drive `appProperties` 冪等、邀請碼雜湊與短效綁定 Token。
 - 金鑰分工：`IDENTIFIER_HASH_SECRET` 只建立長期識別雜湊；`BIND_TOKEN_SECRET` 只簽署短效綁定 Token；`WORKER_GAS_SHARED_SECRET` 只驗證 Worker→GAS envelope。首次上線後不可直接輪替 `IDENTIFIER_HASH_SECRET`。
 - 預設單檔上限為 20 MiB；45 MiB 屬 Apps Script 高風險設定且不保證成功。

@@ -18,11 +18,11 @@ Worker 的 55 秒 timeout 不表示 GAS 已停止。若 timeout 後原 GAS 仍�
 ## Google 綁定
 
 1. Worker 將原始 LINE userId 以 `IDENTIFIER_HASH_SECRET` 做 HMAC-SHA256；`BIND_TOKEN_SECRET` 只簽署 Bind Token，Token 只保存 `lineUserHash`、nonce 與期限。
-2. GAS 驗證邀請碼但不扣次數，BindingSessions 只保存 session nonce、LINE 使用者與邀請碼雜湊。
+2. 使用者可輸入 `綁定 <邀請碼>`，或在 `ENABLE_SELF_SERVICE_BINDING=true` 時輸入不帶邀請碼的 `綁定`。邀請碼流程驗證但不扣次數；自助流程不保存邀請碼。BindingSessions 只保存 session nonce、LINE 使用者與邀請碼雜湊（自助流程為空）。
 3. 綁定頁只驗證 Token；`lineUserHash`、`bindNonce`、`expiresAt` 經 OAuth2 Library 加密 state 往返。
 4. Google 取消授權時，Session 維持 PENDING。授權成功後先保留 OAuth Token，Session 依序進入 AUTHORIZED 與 PROVISIONING，尚不扣邀請次數。
 5. 以 Drive appProperties 建立或重用根目錄、個人／群組目錄與 Sheet。失敗時 Session 轉 FAILED，管理者可安全恢復，不需新邀請碼。
-6. 資源與 Users 資料準備完成後，才在 Script Lock 內以單一 Sheets API 原子批次啟用 Users、完成 Session、消耗 nonce，並增加邀請碼 `UsedCount`。
+6. 資源與 Users 資料準備完成後，才在 Script Lock 內以單一 Sheets API 原子批次完成 Session、消耗 nonce；邀請碼流程才增加 `UsedCount`。自助流程寫入 `ApprovalStatus=PENDING_APPROVAL`／`Enabled=false`，待管理者以安全化代號核准後才啟用。
 
 ## 私訊文字與網址
 

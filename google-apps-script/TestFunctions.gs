@@ -653,6 +653,124 @@ function testGoogleUserOAuthScopes() {
   console.log('使用者 Google OAuth scope 與授權參數測試通過。');
 }
 
+function testSelfServiceApprovalHelpers() {
+  var pendingHash = 'a'.repeat(64);
+  var pendingUser = {
+    LineUserHash: pendingHash,
+    GoogleSubjectId: 'self-service-subject',
+    Enabled: false,
+    ApprovalStatus: USER_APPROVAL_STATUS_.PENDING
+  };
+  assertTest_(getUserReviewCode_(pendingHash) === 'UAAAAAAAA', '待審核代號應為安全化短代號。');
+  assertTest_(!isApprovedEnabledUser_(pendingUser), '未核准使用者不可視為可備份。');
+  assertTest_(
+    determineBindingApprovalStatus_({ InviteCodeHash: '' }, null) === USER_APPROVAL_STATUS_.PENDING,
+    '自助綁定的新使用者應進入 PENDING_APPROVAL。'
+  );
+  assertTest_(
+    determineBindingApprovalStatus_({ InviteCodeHash: 'invite-hash' }, pendingUser) === USER_APPROVAL_STATUS_.APPROVED,
+    '既有邀請碼流程應維持核准。'
+  );
+  assertTest_(
+    determineBindingApprovalStatus_({ InviteCodeHash: '' }, {
+      GoogleSubjectId: 'existing-subject',
+      Enabled: true,
+      ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED
+    }) === USER_APPROVAL_STATUS_.APPROVED,
+    '既有已綁定使用者不可被自助流程改成待審核。'
+  );
+  console.log('自助綁定與管理者審核狀態輔助測試通過。');
+}
+
+function testAdminApprovalSafetyHelpers() {
+  var adminHash = 'b'.repeat(64);
+  var otherHash = 'c'.repeat(64);
+  assertTest_(
+    isAdminLineUserHashConfigured_(adminHash, [adminHash]),
+    '管理者雜湊在白名單內應可通過。'
+  );
+  assertTest_(
+    !isAdminLineUserHashConfigured_(otherHash, [adminHash]),
+    '不在白名單內的使用者不可執行管理者指令。'
+  );
+  assertTest_(
+    !isAdminLineUserHashConfigured_('not-a-hash', [adminHash]),
+    '不符合格式的識別不可視為管理者。'
+  );
+  assertTest_(getUserReviewCode_(adminHash) === 'UBBBBBBBB', '審核代號只能由雜湊前綴產生。');
+  console.log('管理者審核安全輔助測試通過。');
+}
+
+function testBatchApprovalHelpers() {
+  var pendingUsers = [
+    { _row: 2, LineUserHash: 'a'.repeat(64), Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.PENDING },
+    { _row: 3, LineUserHash: 'b'.repeat(64), Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.PENDING },
+    { _row: 4, LineUserHash: 'c'.repeat(64), Enabled: true, ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED },
+    { _row: 5, LineUserHash: 'd'.repeat(64), Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.REJECTED }
+  ];
+  var tokens = parseApprovalTargetTokens_('1,2,3');
+  assertTest_(tokens.length === 3 && tokens[0] === '1' && tokens[2] === '3', '逗號編號應正確解析。');
+  var resolved = resolveApprovalTargets_('1,2,3', pendingUsers.slice(0, 2));
+  assertTest_(resolved.targets.length === 2 && resolved.skipped === 1, '多筆編號應只解析目前可審核使用者。');
+  assertTest_(isPendingApprovalUser_(pendingUsers[0]), 'PENDING_APPROVAL 且停用的使用者應可進入批次。');
+  assertTest_(!isPendingApprovalUser_(pendingUsers[2]), '已核准使用者不可再次批次處理。');
+  assertTest_(!isPendingApprovalUser_(pendingUsers[3]), '已拒絕使用者不可再次批次處理。');
+  Logger.log('PASS testBatchApprovalHelpers：多筆審核與重複處理防護。');
+}
+
+function testApprovalConfirmationExpiry() {
+  var managerHash = 'e'.repeat(64);
+  var code = 'ABCD1234';
+  var now = Date.now();
+  var validRecord = {
+    operation: 'APPROVE_ALL',
+    expiresAt: now + 300000,
+    codeHash: hashIdentifier_('APPROVAL_CONFIRM:' + managerHash + ':' + code)
+  };
+  assertTest_(
+    isApprovalConfirmationValid_(validRecord, managerHash, 'APPROVE_ALL', code, now),
+    '未過期且綁定管理者的確認碼應有效。'
+  );
+  assertTest_(
+    !isApprovalConfirmationValid_(validRecord, managerHash, 'APPROVE_ALL', code, now + 300001),
+    '確認碼過期後不可執行。'
+  );
+  assertTest_(
+    !isApprovalConfirmationValid_(validRecord, 'f'.repeat(64), 'APPROVE_ALL', code, now),
+    '其他管理者不可代用確認碼。'
+  );
+  assertTest_(
+    !isApprovalConfirmationValid_(validRecord, managerHash, 'REJECT_ALL', code, now),
+    '核准確認碼不可改作拒絕操作。'
+  );
+  Logger.log('PASS testApprovalConfirmationExpiry：確認碼期限與管理者綁定。');
+}
+
+function testApprovalConfirmationFlow() {
+  var properties = PropertiesService.getScriptProperties();
+  var managerHash = 'a'.repeat(64);
+  var previousAdmins = properties.getProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+  try {
+    properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, managerHash);
+    var confirmation = createApprovalConfirmation_(managerHash, 'APPROVE_ALL');
+    assertTest_(consumeApprovalConfirmation_(managerHash, 'APPROVE_ALL', confirmation.code), '第一次確認應成功消耗確認碼。');
+    var replayRejected = false;
+    try {
+      consumeApprovalConfirmation_(managerHash, 'APPROVE_ALL', confirmation.code);
+    } catch (error) {
+      replayRejected = isAppError_(error) && error.appCode === 'APPROVAL_CONFIRMATION_INVALID';
+    }
+    assertTest_(replayRejected, '確認碼消耗後不得再次執行整批操作。');
+  } finally {
+    if (previousAdmins === null) {
+      properties.deleteProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+    } else {
+      properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, previousAdmins);
+    }
+  }
+  Logger.log('PASS testApprovalConfirmationFlow：二次確認與防重播。');
+}
+
 function testBindingProvisioningReusesResources() {
   var testUser = getManualTestUser_();
   var first = ensureUserResources_(testUser.accessToken, testUser.lineUserHash, null);

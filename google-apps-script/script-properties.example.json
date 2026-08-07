@@ -12,5 +12,8 @@
   "ERROR_RETENTION_DAYS": "30",
   "COMPLETED_JOB_RETENTION_DAYS": "90",
   "JOB_PROCESSING_LEASE_SECONDS": "600",
-  "HMAC_DIAGNOSTIC_ENABLED": "false"
+  "HMAC_DIAGNOSTIC_ENABLED": "false",
+  "ADMIN_LINE_USER_HASHES": "replace-with-comma-separated-64-char-line-user-hashes",
+  "ENABLE_SELF_SERVICE_BINDING": "true",
+  "REQUIRE_ADMIN_APPROVAL": "true"
 }

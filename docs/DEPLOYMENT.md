@@ -15,7 +15,7 @@
 - [ ] OAuth consent 已設定，測試帳號已加入 Test users。
 - [ ] OAuth Web Client redirect URI 是 Apps Script `/usercallback`。
 - [ ] OAuth2 Library 已加入，identifier 為 `OAuth2`。
-- [ ] 13 個 GAS Properties 已逐項核對；`DELETE_DRIVE_ON_UNSEND` 初期為 `false`、`JOB_PROCESSING_LEASE_SECONDS=600`，2 個保留天數已設定。
+- [ ] 17 個 GAS Properties 已逐項核對；`DELETE_DRIVE_ON_UNSEND` 初期為 `false`、`JOB_PROCESSING_LEASE_SECONDS=600`，2 個保留天數已設定；若啟用自助綁定，`ENABLE_SELF_SERVICE_BINDING=true`、`REQUIRE_ADMIN_APPROVAL=true` 且 `ADMIN_LINE_USER_HASHES` 只填管理者雜湊。
 - [ ] 管理 Sheet 7 個工作表初始化成功；Jobs 包含 `LeaseExpiresAt`，BindingSessions 包含恢復狀態欄位。
 - [ ] GAS Web App 以管理者執行，Anyone 可呼叫；`/exec` health 正常。
 
@@ -41,7 +41,7 @@
 
 ## E. 自己先測
 
-1. 建立 1 次性邀請碼並綁定自己。
+1. 若使用邀請碼模式，建立 1 次性邀請碼並綁定自己；若使用自助模式，先完成自助綁定並由管理者核准自己的安全化代號。
 2. 檢查自己的 Drive 資源與 Users 列。
 3. 傳文字、網址、`#標籤`、小圖片與小型一般檔案。
 4. 檢查 Sheet 16 欄、台北時間、Drive ID／連結與 Jobs COMPLETED。
@@ -51,7 +51,7 @@
 
 ## F. 朋友與群組
 
-1. 每人使用獨立邀請碼；不要用一個高次數共用碼。
+1. 自助模式下，朋友私訊輸入 `綁定`，管理者從 `待審核` 取得安全化代號後輸入 `核准 <編號>`；邀請碼模式則每人使用獨立邀請碼，不要用一個高次數共用碼。
 2. 朋友私訊綁定自己的 Google 帳號，執行私訊隔離測試。
 3. 建一般群組並邀 Bot；擁有者輸入 `綁定群組`。
 4. 不同成員各傳 1 個附件。預期都進 owner Drive，且 sender 欄是各自不同的 HMAC。

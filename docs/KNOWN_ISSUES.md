@@ -14,6 +14,9 @@
 10. `IDENTIFIER_HASH_SECRET` 是永久資料關聯根金鑰。上線後直接輪替會使 Users、Groups、邀請、Nonce、OAuth Service 與 Drive appProperties 全部無法對應；本版不含已部署資料的雙金鑰遷移工具。
 11. AUTHORIZED／FAILED 綁定恢復目前由管理者手動設定 `BINDING_RECOVERY_LINE_USER_HASH` 並執行 `resumeAuthorizedBinding()`；尚未提供一般使用者自助頁面或排程恢復。
 12. Drive 初始化的 appProperties 查詢若遭 Google API 拒絕，GAS 只會在安全 Log 提供 HTTP status、reason、domain、摘要與 correlationId；完整 Drive query、File ID、Token 不會記錄。`files.list` 空結果是正常的不存在狀態，會進入冪等建立流程；非 2xx 會將 BindingSession 保留為 FAILED 供恢復。
+13. 自助綁定的管理者審核目前是 LINE 指令流程，依賴 `ADMIN_LINE_USER_HASHES` 事先填入正確的 64 位識別雜湊；審核代號只取雜湊前綴，若發生極低機率碰撞會拒絕更新並要求管理者重新查詢。批次與整批操作仍沒有獨立管理者後台。
+14. 自助綁定只會在 `ENABLE_SELF_SERVICE_BINDING=true` 時接受無邀請碼的 `綁定`。若屬性未設定或設為 `false`，系統仍只接受既有的 `綁定 <邀請碼>` 流程；這是為了讓既有部署能明確選擇啟用新流程。
+15. 自助流程完成 OAuth 與資源初始化後才進入 `PENDING_APPROVAL`；若初始化失敗，Session 會保留為可恢復狀態，使用者不會出現在審核清單，需先由管理者執行既有恢復流程。
 
 ## 必須在正式帳號人工驗證
 
@@ -34,3 +37,4 @@
 - Token 外部加密資料庫、跨區備援、端到端加密、自動資料保留排程。
 - 已提供管理者手動執行的 `cleanupExpiredAdminRecords`，但不會自動建立時間觸發器；執行頻率仍需依 `COST_AND_QUOTAS.md` 人工安排。
 - 自動化 GAS 測試 runner。GAS 測試須在 Apps Script 編輯器由管理者手動執行。
+- 管理者審核目前不會自動通知管理者；管理者需主動執行 `待審核`，核准或拒絕後再由使用者執行 `狀態` 確認。

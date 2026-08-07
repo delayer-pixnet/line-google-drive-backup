@@ -94,16 +94,20 @@ function assertBindingSessionForCallback_(lineUserHash, bindNonce, expiresAt) {
 function createBindingSession_(lineUserHash, bindNonce, expiresAt, inviteCode) {
   validateBindingSessionInput_(lineUserHash, bindNonce, expiresAt, false);
   var normalizedInviteCode = normalizeInviteCode_(inviteCode);
-  if (!normalizedInviteCode) {
+  if (!normalizedInviteCode && !isSelfServiceBindingEnabled_()) {
     throw createAppError_('INVITATION_INVALID', false, '邀請碼無效、已過期或已達使用次數。');
   }
-  var inviteCodeHash = hashIdentifier_('INVITE:' + normalizedInviteCode);
+  var inviteCodeHash = normalizedInviteCode
+    ? hashIdentifier_('INVITE:' + normalizedInviteCode)
+    : '';
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var invitation = findInvitationByHash_(inviteCodeHash);
-    if (!isInvitationAvailable_(invitation, Date.now())) {
-      throw createAppError_('INVITATION_INVALID', false, '邀請碼無效、已過期或已達使用次數。');
+    if (inviteCodeHash) {
+      var invitation = findInvitationByHash_(inviteCodeHash);
+      if (!isInvitationAvailable_(invitation, Date.now())) {
+        throw createAppError_('INVITATION_INVALID', false, '邀請碼無效、已過期或已達使用次數。');
+      }
     }
     if (findBindingSession_(bindNonce)) {
       throw createAppError_('BIND_SESSION_EXISTS', false, '綁定工作階段已建立，請使用原連結。');
@@ -193,7 +197,9 @@ function markBindingSessionAuthorized_(lineUserHash, bindNonce, expiresAt) {
     var session = assertPendingBindingSession_(lineUserHash, bindNonce, expiresAt);
     assertNonceHashUnused_(session.SessionNonceHash);
     // 授權成功時先保留一個名額；FAILED 仍保留，以確保初始化重試不需要新邀請碼。
-    assertInvitationCanBeReserved_(session.InviteCodeHash);
+    if (session.InviteCodeHash) {
+      assertInvitationCanBeReserved_(session.InviteCodeHash);
+    }
     updateBindingSessionStateWithoutLock_(session, BINDING_SESSION_STATUS_.AUTHORIZED, '');
     return findBindingSessionByNonceHash_(session.SessionNonceHash);
   } finally {
@@ -285,11 +291,51 @@ function validateBindingUserData_(lineUserHash, userData) {
   });
 }
 
+function determineBindingApprovalStatus_(session, existingUser) {
+  if (session.InviteCodeHash) {
+    return USER_APPROVAL_STATUS_.APPROVED;
+  }
+  var existingBoundUser = Boolean(existingUser && existingUser.GoogleSubjectId);
+  if (isAdminApprovalRequired_() && !existingBoundUser) {
+    return USER_APPROVAL_STATUS_.PENDING;
+  }
+  return existingUser ? getUserApprovalStatus_(existingUser) : USER_APPROVAL_STATUS_.APPROVED;
+}
+
 function commitBindingSessionCompletion_(session, invitation, userRow, userValues) {
   var nonceSheet = getAdminSheet_('Nonces');
   var nonceRow = nonceSheet.getLastRow() + 1;
   var usedAt = getTaipeiNow_();
   var spreadsheetId = getAdminSpreadsheet_().getId();
+  var data = [
+    {
+      range: 'BindingSessions!E' + session._row + ':F' + session._row,
+      values: [[usedAt, BINDING_SESSION_STATUS_.COMPLETED]]
+    },
+    {
+      range: 'BindingSessions!H' + session._row + ':I' + session._row,
+      values: [[usedAt, '']]
+    },
+    {
+      range: 'Nonces!A' + nonceRow + ':D' + nonceRow,
+      values: [[
+        session.SessionNonceHash,
+        'BIND_TOKEN',
+        session.ExpiresAt,
+        usedAt
+      ]]
+    },
+    {
+      range: 'Users!A' + userRow + ':K' + userRow,
+      values: [userValues]
+    }
+  ];
+  if (invitation) {
+    data.unshift({
+      range: 'Invitations!D' + invitation._row,
+      values: [[Number(invitation.UsedCount) + 1]]
+    });
+  }
   var response = UrlFetchApp.fetch(
     'https://sheets.googleapis.com/v4/spreadsheets/' + encodeURIComponent(spreadsheetId) +
       '/values:batchUpdate',
@@ -299,33 +345,7 @@ function commitBindingSessionCompletion_(session, invitation, userRow, userValue
       headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
       payload: JSON.stringify({
         valueInputOption: 'RAW',
-        data: [
-          {
-            range: 'Invitations!D' + invitation._row,
-            values: [[Number(invitation.UsedCount) + 1]]
-          },
-          {
-            range: 'BindingSessions!E' + session._row + ':F' + session._row,
-            values: [[usedAt, BINDING_SESSION_STATUS_.COMPLETED]]
-          },
-          {
-            range: 'BindingSessions!H' + session._row + ':I' + session._row,
-            values: [[usedAt, '']]
-          },
-          {
-            range: 'Nonces!A' + nonceRow + ':D' + nonceRow,
-            values: [[
-              session.SessionNonceHash,
-              'BIND_TOKEN',
-              session.ExpiresAt,
-              usedAt
-            ]]
-          },
-          {
-            range: 'Users!A' + userRow + ':J' + userRow,
-            values: [userValues]
-          }
-        ]
+        data: data
       }),
       muteHttpExceptions: true
     }
@@ -351,7 +371,9 @@ function completeBindingSession_(lineUserHash, sessionNonceHash, userData) {
       throw createAppError_('BIND_SESSION_NOT_PROVISIONING', false, '綁定工作階段不在可完成狀態。');
     }
     // AUTHORIZED 已保留名額，因此最終完成不再受原邀請碼到期時間影響。
-    var invitation = assertInvitationCanBeCompleted_(session.InviteCodeHash);
+    var invitation = session.InviteCodeHash
+      ? assertInvitationCanBeCompleted_(session.InviteCodeHash)
+      : null;
     assertNonceHashUnused_(session.SessionNonceHash);
 
     var existingUser = findUserByHash_(lineUserHash);
@@ -359,6 +381,7 @@ function completeBindingSession_(lineUserHash, sessionNonceHash, userData) {
     var userRow = existingUser
       ? existingUser._row
       : getAdminSheet_('Users').getLastRow() + 1;
+    var approvalStatus = determineBindingApprovalStatus_(session, existingUser);
     var userValues = [
       lineUserHash,
       userData.googleSubjectId,
@@ -367,12 +390,13 @@ function completeBindingSession_(lineUserHash, sessionNonceHash, userData) {
       userData.personalFolderId,
       userData.groupFolderId,
       userData.sheetId,
-      true,
+      approvalStatus === USER_APPROVAL_STATUS_.APPROVED,
       existingUser ? existingUser.CreatedAt : now,
-      now
+      now,
+      approvalStatus
     ];
     commitBindingSessionCompletion_(session, invitation, userRow, userValues);
-    return true;
+    return approvalStatus;
   } finally {
     lock.releaseLock();
   }

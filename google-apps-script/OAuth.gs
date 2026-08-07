@@ -39,7 +39,7 @@ function getGoogleOAuthService_(lineUserHash) {
 function getUserAccessToken_(lineUserHash) {
   var service = getGoogleOAuthService_(lineUserHash);
   if (!service.hasAccess()) {
-    throw createAppError_('OAUTH_NOT_BOUND', false, '尚未綁定 Google 帳號，請先輸入「綁定 邀請碼」。');
+    throw createAppError_('OAUTH_NOT_BOUND', false, '尚未完成 Google 綁定。');
   }
   return service.getAccessToken();
 }
@@ -87,15 +87,17 @@ function oauthCallback(request) {
     var service = getGoogleOAuthService_(lineUserHash);
     if (session.Status === BINDING_SESSION_STATUS_.PENDING) {
       if (!service.handleCallback(request)) {
-        template.message = '你已取消 Google 授權，邀請次數不會扣除。';
+        template.message = '你已取消 Google 授權，邀請次數不會扣除（若使用邀請碼）。';
         return template.evaluate().setTitle('授權未完成');
       }
       // Token 已由 OAuth2 Library 保存後才進入 AUTHORIZED；後續失敗不得 reset Token。
       session = markBindingSessionAuthorized_(lineUserHash, bindNonce, expiresAt);
     }
-    provisionAuthorizedBinding_(lineUserHash, session);
+    var provisionResult = provisionAuthorizedBinding_(lineUserHash, session);
     template.success = true;
-    template.message = '綁定完成。之後私訊 Bot 的資料會存入這個 Google 帳號。';
+    template.message = provisionResult.approvalStatus === USER_APPROVAL_STATUS_.PENDING
+      ? 'Google 授權完成，等待管理者審核。審核通過後才會開始備份。'
+      : '綁定完成。之後私訊 Bot 的資料會存入這個 Google 帳號。';
     return template.evaluate().setTitle('綁定完成');
   } catch (error) {
     var appError = isAppError_(error) ? error : createAppError_('OAUTH_CALLBACK_FAILED', true, '綁定失敗，請稍後再試。');
