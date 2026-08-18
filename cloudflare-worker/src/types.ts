@@ -10,10 +10,16 @@ export type SupportedMessageType = "text" | "image" | "video" | "audio" | "file"
 
 export type CommandName =
   | "bind"
+  | "reauthorize"
   | "status"
   | "unbind"
   | "bindGroup"
   | "unbindGroup"
+  | "records"
+  | "groupSummary"
+  | "groupRecords"
+  | "quota"
+  | "groupQuota"
   | "pendingApproval"
   | "approve"
   | "reject"
@@ -33,8 +39,11 @@ export interface QueueJob {
   readonly webhookEventId: string;
   readonly messageId: string | null;
   readonly messageType: SupportedMessageType | null;
-  readonly lineUserId: string | null;
-  readonly groupId: string | null;
+  /** 只傳遞 HMAC 雜湊；原始 LINE 識別不進入 Queue 或 GAS。 */
+  readonly lineUserHash: string | null;
+  readonly groupIdHash: string | null;
+  readonly senderDisplayName: string | null;
+  readonly groupDisplayName: string | null;
   readonly replyToken: string | null;
   readonly timestamp: number;
   readonly fileName: string | null;

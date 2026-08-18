@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hmacSha256Base64,
   hmacSha256Hex,
@@ -6,6 +6,20 @@ import {
 } from "../src/crypto";
 import { handleRequest } from "../src/index";
 import type { Env, QueueJob } from "../src/types";
+
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockImplementation((input: Request | URL | string) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return Promise.resolve(url.includes("/summary")
+      ? Response.json({ groupName: "測試群組" })
+      : Response.json({ displayName: "測試使用者" }));
+  }));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function createEnv(
   sentJobs: QueueJob[],
@@ -63,7 +77,10 @@ describe("LINE Webhook", () => {
       webhookEventId: "evt-001",
       messageId: "msg-001",
       messageType: "file",
-      lineUserId: "U1234567890abcdef",
+      lineUserHash: await hmacSha256Hex("identifier-secret", "U1234567890abcdef"),
+      groupIdHash: null,
+      senderDisplayName: "測試使用者",
+      groupDisplayName: null,
       fileName: "report.pdf",
       fileSize: 1024,
       rawText: null,
@@ -136,6 +153,50 @@ describe("LINE Webhook", () => {
     expect(sentJobs.map((job) => job.webhookEventId)).toEqual(["evt-mention"]);
   });
 
+  it("群組 #筆記 與附件都會建立工作，附件不含二進位內容", async () => {
+    const sentJobs: QueueJob[] = [];
+    const baseEvent = {
+      type: "message",
+      timestamp: 1_785_456_000_000,
+      replyToken: "reply-token",
+      source: { type: "group", groupId: "C1234567890", userId: "U-member" },
+    };
+    const body = JSON.stringify({
+      events: [
+        {
+          ...baseEvent,
+          webhookEventId: "evt-group-note",
+          message: { type: "text", id: "msg-group-note", text: "#筆記 群組測試" },
+        },
+        {
+          ...baseEvent,
+          webhookEventId: "evt-group-attachment",
+          message: { type: "file", id: "msg-group-attachment", fileName: "測試.pdf", fileSize: 1024 },
+        },
+      ],
+    });
+
+    const response = await handleRequest(await signedRequest(body), createEnv(sentJobs));
+
+    expect(response.status).toBe(200);
+    expect(sentJobs).toHaveLength(2);
+    expect(sentJobs[0]).toMatchObject({
+      command: "note",
+      shouldSave: true,
+      groupIdHash: await hmacSha256Hex("identifier-secret", "C1234567890"),
+      senderDisplayName: "測試使用者",
+      groupDisplayName: "測試群組",
+    });
+    expect(sentJobs[1]).toMatchObject({
+      messageType: "file",
+      shouldSave: true,
+      groupIdHash: await hmacSha256Hex("identifier-secret", "C1234567890"),
+      senderDisplayName: "測試使用者",
+    });
+    expect(JSON.stringify(sentJobs)).not.toContain("C1234567890");
+    expect(JSON.stringify(sentJobs)).not.toContain("U-member");
+  });
+
   it("超過設定上限的已知 fileSize 會標記拒絕", async () => {
     const sentJobs: QueueJob[] = [];
     const body = JSON.stringify({
@@ -190,6 +251,25 @@ describe("LINE Webhook", () => {
     expect(bindToken).not.toContain(lineUserId);
   });
 
+  it("LINE Profile API 失敗時仍排入備份工作並使用安全化名稱", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("profile unavailable")));
+    const sentJobs: QueueJob[] = [];
+    const body = JSON.stringify({
+      events: [{
+        type: "message",
+        webhookEventId: "evt-profile-failure",
+        timestamp: 1_785_456_000_000,
+        source: { type: "user", userId: "U-profile-failure" },
+        message: { type: "text", id: "msg-profile-failure", text: "測試備份" },
+      }],
+    });
+
+    const response = await handleRequest(await signedRequest(body), createEnv(sentJobs));
+
+    expect(response.status).toBe(200);
+    expect(sentJobs[0]?.senderDisplayName).toMatch(/^user_[a-f0-9]{8}$/u);
+  });
+
   it("沒有邀請碼的綁定仍會產生短效 OAuth Bind Token", async () => {
     const sentJobs: QueueJob[] = [];
     const body = JSON.stringify({
@@ -208,6 +288,26 @@ describe("LINE Webhook", () => {
     expect(sentJobs[0]?.command).toBe("bind");
     expect(sentJobs[0]?.bindToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
     expect(sentJobs[0]?.bindToken).not.toContain("U-self-service");
+  });
+
+  it("重新授權會產生只含 lineUserHash 的短效 OAuth Bind Token", async () => {
+    const sentJobs: QueueJob[] = [];
+    const body = JSON.stringify({
+      events: [{
+        type: "message",
+        webhookEventId: "evt-reauthorize",
+        timestamp: 1_785_456_000_000,
+        replyToken: "reply-token",
+        source: { type: "user", userId: "U-reauthorize" },
+        message: { type: "text", id: "msg-reauthorize", text: "重新授權" },
+      }],
+    });
+
+    await handleRequest(await signedRequest(body), createEnv(sentJobs));
+
+    expect(sentJobs[0]?.command).toBe("reauthorize");
+    expect(sentJobs[0]?.bindToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+    expect(sentJobs[0]?.bindToken).not.toContain("U-reauthorize");
   });
 
   it("Bind Token 金鑰輪替不改變識別雜湊，識別金鑰輪替才會改變", async () => {

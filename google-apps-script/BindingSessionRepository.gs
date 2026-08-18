@@ -91,10 +91,10 @@ function assertBindingSessionForCallback_(lineUserHash, bindNonce, expiresAt) {
   return session;
 }
 
-function createBindingSession_(lineUserHash, bindNonce, expiresAt, inviteCode) {
+function createBindingSession_(lineUserHash, bindNonce, expiresAt, inviteCode, allowUninvited) {
   validateBindingSessionInput_(lineUserHash, bindNonce, expiresAt, false);
   var normalizedInviteCode = normalizeInviteCode_(inviteCode);
-  if (!normalizedInviteCode && !isSelfServiceBindingEnabled_()) {
+  if (!normalizedInviteCode && !isSelfServiceBindingEnabled_() && allowUninvited !== true) {
     throw createAppError_('INVITATION_INVALID', false, '邀請碼無效、已過期或已達使用次數。');
   }
   var inviteCodeHash = normalizedInviteCode
@@ -295,11 +295,13 @@ function determineBindingApprovalStatus_(session, existingUser) {
   if (session.InviteCodeHash) {
     return USER_APPROVAL_STATUS_.APPROVED;
   }
-  var existingBoundUser = Boolean(existingUser && existingUser.GoogleSubjectId);
-  if (isAdminApprovalRequired_() && !existingBoundUser) {
-    return USER_APPROVAL_STATUS_.PENDING;
+  if (!isAdminApprovalRequired_()) {
+    return USER_APPROVAL_STATUS_.APPROVED;
   }
-  return existingUser ? getUserApprovalStatus_(existingUser) : USER_APPROVAL_STATUS_.APPROVED;
+  if (existingUser && existingUser.GoogleSubjectId) {
+    return getUserApprovalStatus_(existingUser);
+  }
+  return USER_APPROVAL_STATUS_.PENDING;
 }
 
 function commitBindingSessionCompletion_(session, invitation, userRow, userValues) {

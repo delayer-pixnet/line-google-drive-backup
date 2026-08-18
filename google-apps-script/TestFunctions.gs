@@ -4,6 +4,125 @@ function assertTest_(condition, message) {
   }
 }
 
+function getOwnerAuthorizationHealthRequiredKeys_() {
+  return [
+    APP_CONFIG_KEYS_.ADMIN_SPREADSHEET_ID,
+    APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET,
+    APP_CONFIG_KEYS_.IDENTIFIER_HASH_SECRET,
+    APP_CONFIG_KEYS_.BIND_TOKEN_SECRET,
+    APP_CONFIG_KEYS_.LINE_CHANNEL_ACCESS_TOKEN,
+    APP_CONFIG_KEYS_.GOOGLE_OAUTH_CLIENT_ID,
+    APP_CONFIG_KEYS_.GOOGLE_OAUTH_CLIENT_SECRET,
+    APP_CONFIG_KEYS_.MAX_FILE_SIZE_BYTES,
+    APP_CONFIG_KEYS_.APP_BASE_URL
+  ];
+}
+
+/** 部署後由管理者手動執行；只觸發必要授權與唯讀檢查，不建立備份資源。 */
+function testOwnerAuthorizationHealth() {
+  try {
+    var properties = PropertiesService.getScriptProperties();
+    var requiredKeys = getOwnerAuthorizationHealthRequiredKeys_();
+    var missingKeys = requiredKeys.filter(function (key) {
+      var value = properties.getProperty(key);
+      return !value || !String(value).trim();
+    });
+    if (missingKeys.length > 0) {
+      throw createAppError_('OWNER_AUTH_CONFIG_MISSING', false, '必要設定尚未完成。');
+    }
+
+    var adminSpreadsheetId = String(
+      properties.getProperty(APP_CONFIG_KEYS_.ADMIN_SPREADSHEET_ID)
+    ).trim();
+    try {
+      var spreadsheet = SpreadsheetApp.openById(adminSpreadsheetId);
+      spreadsheet.getName();
+    } catch (spreadsheetError) {
+      throw createAppError_('OWNER_AUTH_SPREADSHEET_FAILED', false, '管理試算表授權檢查失敗。');
+    }
+
+    try {
+      var response = UrlFetchApp.fetch('https://www.google.com/robots.txt', {
+        method: 'get',
+        followRedirects: true,
+        muteHttpExceptions: true
+      });
+      if (response.getResponseCode() >= 500) {
+        throw createAppError_('OWNER_AUTH_URLFETCH_FAILED', true, '外部請求授權檢查失敗。');
+      }
+    } catch (urlFetchError) {
+      if (isAppError_(urlFetchError)) {
+        throw urlFetchError;
+      }
+      throw createAppError_('OWNER_AUTH_URLFETCH_FAILED', true, '外部請求授權檢查失敗。');
+    }
+
+    try {
+      var scriptId = ScriptApp.getScriptId();
+      var timeZone = Session.getScriptTimeZone();
+      if (!scriptId || !timeZone) {
+        throw createAppError_('OWNER_AUTH_SCRIPT_FAILED', false, 'Apps Script 授權檢查失敗。');
+      }
+    } catch (scriptError) {
+      if (isAppError_(scriptError)) {
+        throw scriptError;
+      }
+      throw createAppError_('OWNER_AUTH_SCRIPT_FAILED', false, 'Apps Script 授權檢查失敗。');
+    }
+
+    Logger.log('PASS testOwnerAuthorizationHealth');
+  } catch (error) {
+    var appError = isAppError_(error)
+      ? error
+      : createAppError_('OWNER_AUTH_HEALTH_FAILED', false, '擁有者授權健康檢查失敗。');
+    Logger.log('FAIL testOwnerAuthorizationHealth：' + appError.appCode);
+    throw appError;
+  }
+}
+
+function testOwnerAuthorizationHealthHelpers() {
+  var keys = getOwnerAuthorizationHealthRequiredKeys_();
+  assertTest_(keys.indexOf(APP_CONFIG_KEYS_.ADMIN_SPREADSHEET_ID) >= 0, '健康檢查應驗證管理試算表設定。');
+  assertTest_(keys.indexOf(APP_CONFIG_KEYS_.WORKER_GAS_SHARED_SECRET) >= 0, '健康檢查應驗證 Worker HMAC 設定。');
+  assertTest_(typeof testOwnerAuthorizationHealth === 'function', '健康檢查必須是全域函式。');
+  Logger.log('PASS testOwnerAuthorizationHealthHelpers：設定鍵與唯讀授權檢查入口。');
+}
+
+function testOAuthServiceConsistency() {
+  var lineUserHash = 'a'.repeat(64);
+  var existingUser = {
+    GoogleSubjectId: 'mock-subject',
+    RootFolderId: 'root_mock_1',
+    PersonalFolderId: 'personal_mock_1',
+    GroupFolderId: 'group_mock_1',
+    SheetId: 'sheet_mock_1',
+    Enabled: true,
+    ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED
+  };
+  assertTest_(getOAuthServiceName_(lineUserHash) === 'LineUser_' + lineUserHash,
+    'OAuth Service 名稱必須集中使用 LineUser_<lineUserHash>。');
+  assertTest_(hasCompleteUserResources_(existingUser),
+    '重新授權測試使用者應具備可重用的既有 Drive／Sheet 資源。');
+  assertTest_(determineBindingApprovalStatus_({ InviteCodeHash: '' }, existingUser) === USER_APPROVAL_STATUS_.APPROVED,
+    '既有核准使用者重新授權後應維持 APPROVED。');
+  assertTest_(isApprovedEnabledUser_(existingUser),
+    '既有核准使用者重新授權後應維持 Enabled=true。');
+  Logger.log('PASS testOAuthServiceConsistency：OAuth Service、Token 讀取路徑與既有資源重用規則一致。');
+}
+
+/** 使用者設定 TEST_LINE_USER_HASH 後手動執行；只讀取 hasAccess，不輸出 Token 或識別資料。 */
+function testOAuthTokenAvailableForConfiguredUser() {
+  var lineUserHash = PropertiesService.getScriptProperties().getProperty('TEST_LINE_USER_HASH') || '';
+  if (!/^[a-f0-9]{64}$/.test(lineUserHash)) {
+    throw new Error('測試需要 64 碼 TEST_LINE_USER_HASH Script Property。');
+  }
+  var service = getGoogleOAuthService_(lineUserHash);
+  var hasAccess = service.hasAccess();
+  logOAuthTokenState_(lineUserHash, hasAccess, hasAccess ? 'TEST_TOKEN_AVAILABLE' : 'TEST_TOKEN_MISSING', 'manual-oauth-test');
+  assertTest_(hasAccess, '目前使用者 OAuth Token 不存在，請先完成「重新授權」。');
+  Logger.log('PASS testOAuthTokenAvailableForConfiguredUser：OAuth Token 已存在且可由共用 Service 讀取。');
+}
+
 function testHmacVerification() {
   ensureAdminSheets_();
   testEnvelopeHmacFixedVector();
@@ -101,7 +220,9 @@ function testBackupSuccessReplyMessages() {
   cases.forEach(function (testCase) {
     var job = {
       command: null,
-      groupId: null,
+      groupIdHash: null,
+      senderDisplayName: '測試使用者',
+      groupDisplayName: null,
       messageType: testCase.messageType,
       fileName: testCase.fileName || null
     };
@@ -113,7 +234,7 @@ function testBackupSuccessReplyMessages() {
   assertTest_(
     getBackupSuccessReplyMessage_({
       command: null,
-      groupId: 'C-hashed-group',
+      groupIdHash: 'a'.repeat(64),
       messageType: 'image',
       fileName: null
     }) === null,
@@ -122,7 +243,7 @@ function testBackupSuccessReplyMessages() {
   assertTest_(
     getBackupSuccessReplyMessage_({
       command: 'note',
-      groupId: 'C-hashed-group',
+      groupIdHash: 'a'.repeat(64),
       messageType: 'text',
       fileName: null
     }) === '✅ 筆記已備份。',
@@ -277,8 +398,10 @@ function createManualLeaseQueueJob_(eventId) {
     webhookEventId: eventId,
     messageId: 'manual-message-' + Date.now(),
     messageType: 'text',
-    lineUserId: 'Umanual-processing-test',
-    groupId: null,
+    lineUserHash: 'a'.repeat(64),
+    groupIdHash: null,
+    senderDisplayName: 'manual-user',
+    groupDisplayName: null,
     replyToken: null,
     timestamp: Date.now(),
     fileName: null,
@@ -663,10 +786,26 @@ function testSelfServiceApprovalHelpers() {
   };
   assertTest_(getUserReviewCode_(pendingHash) === 'UAAAAAAAA', '待審核代號應為安全化短代號。');
   assertTest_(!isApprovedEnabledUser_(pendingUser), '未核准使用者不可視為可備份。');
-  assertTest_(
-    determineBindingApprovalStatus_({ InviteCodeHash: '' }, null) === USER_APPROVAL_STATUS_.PENDING,
-    '自助綁定的新使用者應進入 PENDING_APPROVAL。'
-  );
+  var properties = PropertiesService.getScriptProperties();
+  var previousApprovalSetting = properties.getProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL);
+  try {
+    properties.setProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL, 'true');
+    assertTest_(
+      determineBindingApprovalStatus_({ InviteCodeHash: '' }, null) === USER_APPROVAL_STATUS_.PENDING,
+      'REQUIRE_ADMIN_APPROVAL=true 時自助綁定應進入 PENDING_APPROVAL。'
+    );
+    properties.setProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL, 'false');
+    assertTest_(
+      determineBindingApprovalStatus_({ InviteCodeHash: '' }, null) === USER_APPROVAL_STATUS_.APPROVED,
+      'REQUIRE_ADMIN_APPROVAL=false 時自助綁定應自動 APPROVED。'
+    );
+  } finally {
+    if (previousApprovalSetting === null) {
+      properties.deleteProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL);
+    } else {
+      properties.setProperty(APP_CONFIG_KEYS_.REQUIRE_ADMIN_APPROVAL, previousApprovalSetting);
+    }
+  }
   assertTest_(
     determineBindingApprovalStatus_({ InviteCodeHash: 'invite-hash' }, pendingUser) === USER_APPROVAL_STATUS_.APPROVED,
     '既有邀請碼流程應維持核准。'
@@ -679,7 +818,331 @@ function testSelfServiceApprovalHelpers() {
     }) === USER_APPROVAL_STATUS_.APPROVED,
     '既有已綁定使用者不可被自助流程改成待審核。'
   );
-  console.log('自助綁定與管理者審核狀態輔助測試通過。');
+  Logger.log('PASS testSelfServiceApprovalHelpers：自助綁定自動核准／管理者審核分流。');
+}
+
+function testRoleBasedHelpMessages() {
+  var properties = PropertiesService.getScriptProperties();
+  var previousAdmins = properties.getProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+  var adminRawIdentifier = 'manual-help-admin';
+  var regularRawIdentifier = 'manual-help-user';
+  var adminHash = hashIdentifier_(adminRawIdentifier);
+  try {
+    properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, adminHash);
+    var regularHelp = getHelpMessage_({ lineUserHash: hashIdentifier_(regularRawIdentifier), groupIdHash: null });
+    var adminHelp = getHelpMessage_({ lineUserHash: adminHash, groupIdHash: null });
+    var groupHelp = getHelpMessage_({ lineUserHash: hashIdentifier_(regularRawIdentifier), groupIdHash: 'a'.repeat(64) });
+    assertTest_(regularHelp.indexOf('待審核') < 0, '一般使用者說明不得顯示管理者指令。');
+    ['綁定', '狀態', '解除綁定', '紀錄', '查詢紀錄', '容量', '空間', 'Drive容量', '#筆記', '20 MB 以下'].forEach(function (keyword) {
+      assertTest_(regularHelp.indexOf(keyword) >= 0, '一般使用者說明缺少：' + keyword);
+    });
+    ['待審核', '核准 <編號[,編號]>', '拒絕 <編號[,編號]>', '核准全部', '拒絕全部', '確認核准全部', '確認拒絕全部']
+      .forEach(function (keyword) {
+        assertTest_(adminHelp.indexOf(keyword) >= 0, '管理者說明缺少：' + keyword);
+      });
+    assertTest_(adminHelp.indexOf('【管理者指令】（僅管理者可見）') >= 0, '管理者說明應標示管理者專區。');
+    ['#筆記', '狀態', '綁定群組', '解除群組', '容量資訊屬於個人 Google Drive', '群組附件備份規則', '群組附件成功預設不回覆', '群組 #筆記 成功會回覆', '個人綁定、紀錄查詢、容量查詢與管理者審核指令請私訊 Bot 執行。']
+      .forEach(function (keyword) {
+        assertTest_(groupHelp.indexOf(keyword) >= 0, '群組說明缺少：' + keyword);
+      });
+    assertTest_(groupHelp.indexOf('待審核') < 0, '群組說明不得顯示管理者指令。');
+    assertTest_(groupHelp.indexOf('route=bind') < 0 && groupHelp.indexOf('route=query') < 0 && groupHelp.indexOf('http') < 0, '群組說明不得顯示 OAuth 或查詢連結。');
+    [adminRawIdentifier, regularRawIdentifier, 'user@example.com', 'Access Token', 'Refresh Token', 'Secret']
+      .forEach(function (sensitiveValue) {
+        assertTest_(regularHelp.indexOf(sensitiveValue) < 0 && adminHelp.indexOf(sensitiveValue) < 0 && groupHelp.indexOf(sensitiveValue) < 0, '說明不得包含敏感資料：' + sensitiveValue);
+      });
+  } finally {
+    if (previousAdmins === null) {
+      properties.deleteProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+    } else {
+      properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, previousAdmins);
+    }
+  }
+  Logger.log('PASS testRoleBasedHelpMessages：一般使用者、管理者與群組說明分流。');
+}
+
+function testRecordQueryTokenHelpers() {
+  var lineUserHash = 'a'.repeat(64);
+  var nonce = '0123456789abcdef0123456789abcdef';
+  var now = Date.now();
+  var token = createRecordQueryToken_(lineUserHash, now + 600000, nonce, 'TEST_QUERY_SECRET');
+  var payload = decodeRecordQueryPayload_(token.split('.')[0]);
+  assertTest_(isRecordQueryPayloadValid_(payload, now), '未過期查詢 Token 應可通過格式驗證。');
+  assertTest_(token.indexOf(lineUserHash) < 0, '查詢 Token 不得直接包含識別雜湊以外的原始識別。');
+  assertTest_(!isRecordQueryPayloadValid_(
+    decodeRecordQueryPayload_(createRecordQueryToken_(lineUserHash, now - 1, nonce, 'TEST_QUERY_SECRET').split('.')[0]),
+    now
+  ), '過期查詢 Token 不可使用。');
+  var otherUserPayload = Object.assign({}, payload, { lineUserHash: 'b'.repeat(64) });
+  assertTest_(otherUserPayload.lineUserHash !== payload.lineUserHash, '查詢 Token 必須綁定單一使用者。');
+  Logger.log('PASS testRecordQueryTokenHelpers：查詢 Token 期限、雜湊與使用者綁定。');
+}
+
+function testRecordQueryDisplaySafety() {
+  var row = {
+    'LINE 訊息時間': '2026-08-08 12:00:00',
+    '來源類型': '群組',
+    '群組名稱': '測試群組',
+    '傳送者識別': 'sender-hash',
+    '傳送者名稱': 'U0123456789abcdef0123456789abcdef user@example.com',
+    '訊息類型': 'text',
+    '原始檔名': '',
+    '文字內容': '訊息內容 0123456789abcdef0123456789abcdef',
+    '錯誤訊息': '',
+    'Drive 連結': ''
+  };
+  var mapped = mapRecordQueryRow_(row);
+  var serialized = JSON.stringify(mapped);
+  assertTest_(serialized.indexOf('U0123456789abcdef0123456789abcdef') < 0, '查詢結果不得顯示 LINE userId。');
+  assertTest_(serialized.indexOf('user@example.com') < 0, '查詢結果不得顯示 Google Email 原文。');
+  assertTest_(serialized.indexOf('0123456789abcdef0123456789abcdef') < 0, '查詢結果不得顯示完整識別雜湊。');
+  assertTest_(mapped.senderName.indexOf('已隱藏') >= 0, '查詢結果應顯示安全化傳送者名稱。');
+  assertTest_(matchesRecordQueryFilters_(row, normalizeRecordQueryFilters_({ keyword: '測試群組' })), '群組名稱應可搜尋。');
+  assertTest_(matchesRecordQueryFilters_(row, normalizeRecordQueryFilters_({ keyword: '訊息內容' })), '文字內容應可搜尋。');
+  Logger.log('PASS testRecordQueryDisplaySafety：查詢結果敏感欄位遮罩。');
+}
+
+function testRecordQueryShortCodeHelpers() {
+  var lineUserHash = 'a'.repeat(64);
+  var groupHash = 'b'.repeat(64);
+  var shortCode = createRecordQueryShortCode_();
+  assertTest_(isRecordQueryShortCode_(shortCode), '短碼必須是 8～12 碼 URL safe 字串。');
+  assertTest_(shortCode.length === 10, '短碼預設長度應為 10 碼。');
+  assertTest_(shortCode.indexOf(lineUserHash) < 0 && shortCode.indexOf(groupHash) < 0, '短碼不可包含識別雜湊。');
+  var shortHash = hashRecordQueryShortCode_(shortCode);
+  assertTest_(/^[a-f0-9]{64}$/.test(shortHash), '短碼只應以 HMAC 雜湊保存。');
+  var shortUrl = buildRecordQueryShortUrl_('https://example.invalid/exec', shortCode);
+  assertTest_(/\/exec\?route=q&id=[A-Za-z0-9_-]{8,12}$/.test(shortUrl), '查詢網址應只帶 route=q 與短碼。');
+  assertTest_(shortUrl.indexOf(lineUserHash) < 0 && shortUrl.indexOf(groupHash) < 0, '查詢網址不得包含使用者或群組雜湊。');
+  var record = {
+    lineUserHash: lineUserHash,
+    groupIdHash: groupHash,
+    startDate: '2026-08-01',
+    endDate: '2026-08-31',
+    expiresAt: Date.now() + 600000,
+    nonce: '0123456789abcdef0123456789abcdef',
+    scope: 'group-record-query'
+  };
+  var serialized = JSON.stringify(record);
+  assertTest_(serialized.indexOf(shortCode) < 0, '儲存資料不應保存完整短碼。');
+  assertTest_(getRecordQueryShortPropertyKey_(shortHash).indexOf(shortCode) < 0, 'Property key 不應包含完整短碼。');
+  Logger.log('PASS testRecordQueryShortCodeHelpers：短碼格式、雜湊儲存與不可逆內容。');
+}
+
+function testLegacyGroupRecordSafetyHelpers() {
+  var ownerHash = 'a'.repeat(64);
+  var group = { OwnerLineUserHash: ownerHash, GroupName: '唯一群組', GroupIdHash: 'b'.repeat(64), Enabled: true };
+  var uniqueMap = getUniqueLegacyGroupMap_([group]);
+  assertTest_(uniqueMap[ownerHash + '\n唯一群組'].GroupIdHash === group.GroupIdHash, '唯一群組名稱應可建立安全對應。');
+  var duplicate = Object.assign({}, group, { GroupIdHash: 'c'.repeat(64) });
+  var duplicateMap = getUniqueLegacyGroupMap_([group, duplicate]);
+  assertTest_(duplicateMap[ownerHash + '\n唯一群組'] === null, '同 owner 同名群組不得 fallback。');
+  assertTest_(isLegacyGroupRecordForGroup_({
+    '來源類型': '群組',
+    '群組識別': '',
+    '群組名稱': '唯一群組'
+  }, group), '舊群組紀錄需符合來源、空識別與名稱。');
+  assertTest_(!isLegacyGroupRecordForGroup_({
+    '來源類型': '個人',
+    '群組識別': '',
+    '群組名稱': '唯一群組'
+  }, group), '個人紀錄不可 fallback 成群組紀錄。');
+  Logger.log('PASS testLegacyGroupRecordSafetyHelpers：舊群組名稱唯一性與安全 fallback。');
+}
+
+function testBackupSheetHeaderMappingHelpers() {
+  var oldHeaders = [
+    'LINE 訊息時間', '來源類型', '群組名稱', '傳送者識別', '訊息類型',
+    '原始檔名', '文字內容', '網址', '標籤', 'Drive File ID', 'Drive 連結',
+    'webhookEventId', 'messageId', '狀態', '錯誤訊息'
+  ];
+  var missing = getMissingBackupSheetHeaders_(oldHeaders);
+  assertTest_(missing.indexOf('傳送者名稱') >= 0, '舊 Sheet 缺少傳送者名稱時應補欄。');
+  assertTest_(missing.indexOf('群組識別') >= 0, '舊 Sheet 缺少群組識別時應補欄。');
+  var reorderedHeaders = [
+    '傳送者名稱', 'messageId', '傳送者識別', '來源類型', 'LINE 訊息時間',
+    '訊息類型', '狀態', '錯誤訊息'
+  ];
+  var row = buildBackupRecordRowByHeaders_(reorderedHeaders, {
+    messageTimestamp: Date.now(),
+    sourceType: '個人',
+    senderHash: 'a'.repeat(64),
+    senderDisplayName: '=危險名稱',
+    messageType: 'text',
+    messageId: 'manual-message-id',
+    status: '完成',
+    errorMessage: ''
+  });
+  assertTest_(row[0] === "'=危險名稱", '傳送者名稱遇到公式前綴時應安全處理。');
+  assertTest_(row[1] === 'manual-message-id', '寫入資料應依標題名稱對應，不依固定欄位 index。');
+  assertTest_(row[2] === 'a'.repeat(64), '傳送者識別應保留安全雜湊。');
+  Logger.log('PASS testBackupSheetHeaderMappingHelpers：標題補欄、欄位對應與公式注入防護。');
+}
+
+function testBackupRecordDisplayNameHelpers() {
+  var personalRow = buildBackupRecordRowByHeaders_(BACKUP_SHEET_HEADERS_, {
+    messageTimestamp: Date.now(),
+    sourceType: '個人',
+    senderHash: 'a'.repeat(64),
+    senderDisplayName: '私人使用者',
+    messageType: 'text',
+    rawText: '文字測試',
+    status: '完成'
+  });
+  var senderNameIndex = BACKUP_SHEET_HEADERS_.indexOf('傳送者名稱');
+  var senderHashIndex = BACKUP_SHEET_HEADERS_.indexOf('傳送者識別');
+  assertTest_(personalRow[senderNameIndex] === '私人使用者', '私訊文字應寫入傳送者名稱。');
+  assertTest_(personalRow[senderHashIndex] === 'a'.repeat(64), '傳送者識別應為實際發話者雜湊。');
+
+  var groupRow = buildBackupRecordRowByHeaders_(BACKUP_SHEET_HEADERS_, {
+    messageTimestamp: Date.now(),
+    sourceType: '群組',
+    groupName: '測試群組',
+    groupHash: 'b'.repeat(64),
+    senderHash: 'b'.repeat(64),
+    senderDisplayName: '群組成員',
+    messageType: 'text',
+    rawText: '#筆記 測試',
+    status: '完成'
+  });
+  assertTest_(groupRow[senderNameIndex] === '群組成員', '群組筆記應寫入實際發話者名稱。');
+  assertTest_(groupRow[senderHashIndex] === 'b'.repeat(64), '群組傳送者識別不可改成 owner 或 Bot 雜湊。');
+  var groupHashIndex = BACKUP_SHEET_HEADERS_.indexOf('群組識別');
+  assertTest_(groupRow[groupHashIndex] === 'b'.repeat(64), '群組紀錄應寫入安全群組識別。');
+  Logger.log('PASS testBackupRecordDisplayNameHelpers：私訊、附件與群組筆記名稱欄位。');
+}
+
+function testGroupBackupQueryHelpers() {
+  var now = new Date('2026-08-18T12:00:00+08:00').getTime();
+  var currentMonth = parseGroupSummaryQuery_('備份清單', now);
+  assertTest_(currentMonth.label === '2026/08', '備份清單應查詢目前月份。');
+  assertTest_(parseGroupSummaryQuery_('今日備份清單', now).startDate === '2026-08-18', '今日日期範圍不正確。');
+  assertTest_(parseGroupSummaryQuery_('本週備份清單', now).startDate === '2026-08-17', '本週應從星期一開始。');
+  assertTest_(parseGroupSummaryQuery_('8月備份清單', now).label === '2026/08', '月份查詢解析失敗。');
+  assertTest_(parseGroupSummaryQuery_('2026年8月備份清單', now).label === '2026/08', '年月份查詢解析失敗。');
+  assertTest_(parseGroupSummaryQuery_('2026-08 備份清單', now).label === '2026/08', 'ISO 年月份查詢解析失敗。');
+  assertTest_(parseGroupSummaryQuery_('13月備份清單', now) === null, '無效月份應拒絕。');
+  assertTest_(getGroupQuerySafeCode_('abcdef1234567890') === 'g_abcdef12', '群組安全代號格式不正確。');
+  var safeSummary = formatGroupSummaryReply_({ GroupName: '測試群組' }, currentMonth, {
+    records: [{
+      'LINE 訊息時間': '2026-08-18 10:00:00',
+      '訊息類型': 'file',
+      '原始檔名': '文件.pdf',
+      '狀態': '完成'
+    }],
+    counts: { image: 0, video: 0, audio: 0, file: 1, note: 0, text: 0 },
+    legacyFallback: false
+  });
+  assertTest_(safeSummary.indexOf('drive.google.com') < 0, '群組摘要不可顯示 Drive 連結。');
+  assertTest_(safeSummary.indexOf('webhook') < 0, '群組摘要不可顯示工作識別。');
+  assertTest_(safeSummary.indexOf('最新 1 筆') >= 0, '群組摘要應限制並顯示最新紀錄數量。');
+  Logger.log('PASS testGroupBackupQueryHelpers：群組日期解析、摘要與安全代號。');
+}
+
+function testGroupRecordQueryTokenHelpers() {
+  var lineUserHash = 'a'.repeat(64);
+  var groupHash = 'b'.repeat(64);
+  var token = createRecordQueryToken_(
+    lineUserHash,
+    Date.now() + 600000,
+    '0123456789abcdef0123456789abcdef',
+    'TEST_QUERY_SECRET',
+    groupHash,
+    '2026-08-01',
+    '2026-08-31'
+  );
+  var payload = decodeRecordQueryPayload_(token.split('.')[0]);
+  assertTest_(payload.version === 2, '群組查詢 Token 應使用獨立版本。');
+  assertTest_(payload.groupIdHash === groupHash, '群組查詢 Token 必須綁定群組雜湊。');
+  assertTest_(isRecordQueryPayloadValid_(payload), '群組查詢 Token 格式應有效。');
+  assertTest_(token.indexOf(groupHash) < 0, '完整群組雜湊不可直接出現在編碼 Token。');
+  Logger.log('PASS testGroupRecordQueryTokenHelpers：使用者、群組與期限綁定。');
+}
+
+function testDriveQuotaHelpers() {
+  var mockHash = 'a'.repeat(64);
+  assertTest_(formatDriveQuotaBytes_(1024) === '1 KB', '1024 bytes 應格式化為 1 KB。');
+  assertTest_(formatDriveQuotaBytes_(1024 * 1024) === '1 MB', 'MiB 應正確格式化。');
+  assertTest_(formatDriveQuotaPercentage_(50, 200) === '25.0%', '使用率應保留 1 位小數。');
+  assertTest_(formatDriveQuotaPercentage_(50, null) === null, '無容量上限時不可計算使用率。');
+  assertTest_(
+    getDriveQuotaUserMessage_({ httpStatus: 403, googleReason: 'insufficientPermissions' }) ===
+      '目前 Google Drive 授權不足，請重新輸入「綁定」完成授權。',
+    'Drive 403 insufficientPermissions 應回覆重新綁定提示。'
+  );
+  assertTest_(
+    getDriveQuotaUserMessage_({ httpStatus: 500 }) === '暫時無法取得容量資訊，請稍後再試。',
+    'Drive 暫時錯誤應回覆安全訊息。'
+  );
+  var limitedReply = formatPersonalDriveQuotaReply_({
+    limit: 1000,
+    usage: 250,
+    usageInDrive: 200,
+    usageInDriveTrash: 50,
+    lineBackupUsage: 100,
+    updatedAt: '2026/08/09 12:30'
+  });
+  assertTest_(limitedReply.indexOf('剩餘容量：750 B') >= 0, '應顯示剩餘容量。');
+  assertTest_(limitedReply.indexOf('使用率：25.0%') >= 0, '應顯示使用率。');
+  var unlimitedReply = formatPersonalDriveQuotaReply_({
+    limit: null,
+    usage: 250,
+    usageInDrive: 200,
+    usageInDriveTrash: 50,
+    lineBackupUsage: 100,
+    updatedAt: '2026/08/09 12:30'
+  });
+  assertTest_(unlimitedReply.indexOf('總容量：未提供或無限制') >= 0, '無上限時應顯示未提供或無限制。');
+  assertTest_(unlimitedReply.indexOf('剩餘容量：') < 0, '無上限時不可顯示計算後的剩餘容量。');
+  assertTest_(sumDriveFileSizes_([
+    { mimeType: 'text/plain', size: '1024' },
+    { mimeType: 'application/vnd.google-apps.document' },
+    { mimeType: 'application/vnd.google-apps.folder', size: '2048' }
+  ]) === 1024, 'Google 原生文件與資料夾無 size 時不可造成錯誤。');
+  var cache = CacheService.getScriptCache();
+  cache.remove(getDriveQuotaCacheKey_(mockHash));
+  var computeCount = 0;
+  var first = getOrComputeDriveQuotaResult_(mockHash, function () {
+    computeCount += 1;
+    return { lineBackupUsage: 123, updatedAt: '2026/08/09 12:30' };
+  });
+  var second = getOrComputeDriveQuotaResult_(mockHash, function () {
+    computeCount += 1;
+    return { lineBackupUsage: 456, updatedAt: '2026/08/09 12:31' };
+  });
+  assertTest_(computeCount === 1 && first.lineBackupUsage === second.lineBackupUsage, '10 分鐘快取內不可重掃 Drive。');
+  cache.remove(getDriveQuotaCacheKey_(mockHash));
+  var childrenUrl = buildDriveChildrenListUrl_('FOLDER_TEST_123', '');
+  assertTest_(childrenUrl.indexOf('q=') >= 0 && childrenUrl.indexOf('fields=') >= 0, 'Drive files.list 查詢應安全包含 q 與 fields。');
+  Logger.log('PASS testDriveQuotaHelpers：容量格式化、無上限、檔案大小加總與 10 分鐘快取。');
+}
+
+function testDriveQuotaUserBindingCompatibility() {
+  var legacyEnabledUser = { Enabled: true, ApprovalStatus: '' };
+  var stringEnabledLegacyUser = { Enabled: 'TRUE', ApprovalStatus: '' };
+  var approvedUser = { Enabled: true, ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED };
+  var pendingUser = { Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.PENDING };
+  var disabledUser = { Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED };
+
+  assertTest_(getUserApprovalStatus_(legacyEnabledUser) === USER_APPROVAL_STATUS_.APPROVED,
+    '舊使用者 ApprovalStatus 空白且 Enabled=true 應視為 APPROVED。');
+  assertTest_(isApprovedEnabledUser_(legacyEnabledUser), '舊使用者應可通過容量查詢啟用判斷。');
+  assertTest_(isApprovedEnabledUser_(stringEnabledLegacyUser), '字串 TRUE 的舊使用者應可相容判斷。');
+  assertTest_(isApprovedEnabledUser_(approvedUser), 'APPROVED 且 Enabled=true 應可查詢容量。');
+  assertTest_(!isApprovedEnabledUser_(pendingUser), 'PENDING_APPROVAL 使用者不可查詢容量。');
+  assertTest_(!isApprovedEnabledUser_(disabledUser), 'Enabled=false 使用者不可查詢容量。');
+  assertTest_(getDriveQuotaUserMessage_({ appCode: 'DRIVE_QUOTA_USER_NOT_ENABLED' }) ===
+    '請先完成 Google 帳號綁定後再查詢容量。', '未綁定或未啟用應顯示綁定提示。');
+  assertTest_(getDriveQuotaUserMessage_({ appCode: 'OAUTH_TOKEN_MISSING' }) ===
+    'Google 授權已失效，請重新輸入「綁定」完成授權。', 'OAuth Token 不存在應顯示授權失效提示。');
+  assertTest_(getDriveQuotaUserMessage_({ appCode: 'OAUTH_TOKEN_READ_FAILED' }) ===
+    'Google 授權已失效，請重新輸入「綁定」完成授權。', 'OAuth Token 讀取失敗應顯示授權失效提示。');
+  assertTest_(getDriveQuotaUserMessage_({
+    httpStatus: 403,
+    googleReason: 'insufficientPermissions'
+  }) === '目前 Google Drive 授權不足，請重新輸入「綁定」完成授權。',
+  'Drive 403 insufficientPermissions 應顯示授權不足提示。');
+  Logger.log('PASS testDriveQuotaUserBindingCompatibility：舊版、核准、待審核與授權失效分流。');
 }
 
 function testAdminApprovalSafetyHelpers() {
@@ -699,6 +1162,80 @@ function testAdminApprovalSafetyHelpers() {
   );
   assertTest_(getUserReviewCode_(adminHash) === 'UBBBBBBBB', '審核代號只能由雜湊前綴產生。');
   console.log('管理者審核安全輔助測試通過。');
+}
+
+function testGroupPermissionHelpers() {
+  var ownerHash = 'a'.repeat(64);
+  var memberHash = 'b'.repeat(64);
+  var adminHash = 'c'.repeat(64);
+  var group = { OwnerLineUserHash: ownerHash, Enabled: true };
+  var approvedOwner = {
+    LineUserHash: ownerHash,
+    Enabled: true,
+    ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED
+  };
+  var unapprovedMember = {
+    LineUserHash: memberHash,
+    Enabled: false,
+    ApprovalStatus: USER_APPROVAL_STATUS_.PENDING
+  };
+  assertTest_(
+    canGroupMemberSubmitBackup_(group, approvedOwner),
+    '群組成員提供內容時，只要 owner 已核准即可備份。'
+  );
+  assertTest_(
+    !canGroupMemberSubmitBackup_(group, null),
+    '群組 owner 未核准時不可備份。'
+  );
+  assertTest_(isGroupManager_(group, ownerHash), '群組 owner 應可操作群組管理指令。');
+  assertTest_(!isGroupManager_(group, memberHash), '一般群組成員不可操作群組管理指令。');
+  assertTest_(
+    getGroupCommandRestrictionMessage_('pendingApproval') === '管理指令請私訊 Bot 執行。',
+    '群組不可執行管理者審核指令。'
+  );
+  assertTest_(
+    getGroupCommandRestrictionMessage_('bind') === '個人綁定請私訊 Bot 執行，避免授權連結曝光。',
+    '群組不可產生個人 OAuth 綁定連結。'
+  );
+  assertTest_(
+    getGroupCommandRestrictionMessage_('reauthorize') === '個人重新授權請私訊 Bot 執行。',
+    '群組不可產生個人重新授權連結。'
+  );
+  assertTest_(
+    getGroupCommandRestrictionMessage_('records') === '紀錄查詢請私訊 Bot 執行。',
+    '群組不可直接開啟個人紀錄查詢連結。'
+  );
+  assertTest_(
+    getGroupCommandRestrictionMessage_('quota') === '容量資訊屬於個人 Google Drive，請私訊 Bot 輸入「容量」查詢。',
+    '群組不可公開顯示個人容量。'
+  );
+  assertTest_(
+    getGroupCommandRestrictionMessage_('groupQuota') === '容量資訊屬於個人 Google Drive，請私訊 Bot 輸入「容量」查詢。',
+    '群組不可公開顯示群組 owner 容量。'
+  );
+  assertTest_(getGroupCommandRestrictionMessage_('status') === null, '群組狀態指令應保留。');
+  assertTest_(getGroupCommandRestrictionMessage_('groupSummary') === null, '群組備份清單摘要應允許成員查詢。');
+  assertTest_(
+    getGroupCommandRestrictionMessage_('groupRecords') === '群組完整紀錄請私訊 Bot 執行。',
+    '群組完整紀錄不可在群組內公開。'
+  );
+  assertTest_(getGroupStatusMessage_(group) === '此群組已綁定', '群組狀態只應顯示綁定狀態。');
+  assertTest_(getGroupStatusMessage_(null) === '此群組尚未綁定', '未綁定群組狀態應安全顯示。');
+
+  var properties = PropertiesService.getScriptProperties();
+  var previousAdmins = properties.getProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+  try {
+    properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, adminHash);
+    assertTest_(isGroupManager_(group, adminHash), '管理者應可操作群組管理指令。');
+  } finally {
+    if (previousAdmins === null) {
+      properties.deleteProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES);
+    } else {
+      properties.setProperty(APP_CONFIG_KEYS_.ADMIN_LINE_USER_HASHES, previousAdmins);
+    }
+  }
+  assertTest_(!isApprovedEnabledUser_(unapprovedMember), '未核准成員不可被誤視為 owner。');
+  Logger.log('PASS testGroupPermissionHelpers：群組成員備份與 owner／管理者權限。');
 }
 
 function testBatchApprovalHelpers() {

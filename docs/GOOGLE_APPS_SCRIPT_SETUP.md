@@ -12,7 +12,7 @@
 1. 建立獨立 Apps Script 專案，Project Settings 將時區設為 `Asia/Taipei`，啟用顯示 `appsscript.json`。
 2. 可用 `clasp`：複製 `.clasp.json.example` 為 `.clasp.json`，填入 Script ID，再從 `google-apps-script` 目錄執行 `clasp push`。也可在編輯器逐一建立同名 `.gs`／`.html` 並貼入內容。
 3. 確認 `appsscript.json` 包含 OAuth2 Library dependency。若需由 UI 手動加入，Library Script ID 為公開的官方 ID `1B7FSrk5Zi6L1rSxxTDgDEUsPzlukDsi4KGuTMorsTQHhGBzBkMun4iDF`，identifier 使用 `OAuth2`，版本使用文件指定版本或經測試的新版本。
-4. 預期左側檔案清單可看到 `Main.gs`、`OAuth.gs`、各 Service／Repository、2 個 HTML 與 `appsscript.json`。
+4. 預期左側檔案清單可看到 `Main.gs`、`OAuth.gs`、各 Service／Repository、`BindPage.html`、`ResultPage.html`、`RecordSearchPage.html` 與 `appsscript.json`。
 
 `appsscript.json` 的 `oauthScopes` 是 Apps Script 程式自身執行用權限，例如 `script.external_request` 與管理 Sheet 的 `spreadsheets`；它們不等於朋友 Google 帳號的授權範圍。朋友的 OAuth scope 只由 `OAuth.gs` 的 `getGoogleOAuthService_()` 明確設定，包含 `openid`、`email`、`profile` 與 `https://www.googleapis.com/auth/drive.file`，並要求 `access_type=offline`、`prompt=consent`。因此首次開啟 Web App 可能先看到 Apps Script 自身的授權畫面；完成該層授權後，綁定連結才會顯示使用者 Google OAuth 的 Drive 檔案權限。不要把 `script.external_request` 加入使用者 OAuth scope，也不要把 `drive.file` 當成管理者 Apps Script scope。
 
@@ -38,7 +38,7 @@
 | `HMAC_DIAGNOSTIC_ENABLED` | `false`；只在定位 `SIGNATURE_INVALID` 時與 Worker 暫時同步設為 `true` | 否 | 範例可、正式設定不提交 | 未設定或非 `true` 時不輸出任何診斷指紋；完成比對後應立即改回 `false` |
 | `ADMIN_LINE_USER_HASHES` | 逗號分隔的 64 位小寫 `lineUserHash`；只填管理者，不填原始 LINE userId | 敏感設定 | 否 | 格式錯誤時管理者指令會被拒絕 |
 | `ENABLE_SELF_SERVICE_BINDING` | `true` 或 `false`；`true` 允許私訊輸入「綁定」直接取得 OAuth 連結 | 否 | 範例可、正式設定不提交 | `false` 時仍只能使用「綁定 <邀請碼>」 |
-| `REQUIRE_ADMIN_APPROVAL` | 建議 `true`；自助 OAuth 完成後先建立 `PENDING_APPROVAL` 且停用備份 | 否 | 範例可、正式設定不提交 | `true` 時未核准帳號不可備份或綁定群組 |
+| `REQUIRE_ADMIN_APPROVAL` | `true` 時自助 OAuth 完成後先建立 `PENDING_APPROVAL` 且停用備份；`false` 時初始化完成即 `APPROVED`／啟用 | 否 | 範例可、正式設定不提交 | `true` 時未核准帳號不可備份或綁定群組 |
 
 `script-properties.example.json` 列出完整範例名稱，可用來逐項核對，但不可直接填入真實值後提交。`WORKER_GAS_SHARED_SECRET`、`BIND_TOKEN_SECRET` 與 `IDENTIFIER_HASH_SECRET` 必須三者不同。可用密碼管理器產生高熵值；不要把產生指令輸出貼入文件或終端紀錄截圖。
 
@@ -49,6 +49,8 @@
 `IDENTIFIER_HASH_SECRET` 是永久資料關聯的一部分。首次正式上線後不可直接更換；它同時影響 Users、Groups、Invitations、Nonces、BindingSessions、OAuth Service 名稱與 Drive `lineBackupEventKey`。若日後確實需要輪替，必須另行設計資料與 Token 遷移，不能只替換 Property。
 
 自助綁定啟用後，管理者可在私訊使用 `待審核`、`核准 <編號[,編號]>`、`拒絕 <編號[,編號]>`。`核准全部`／`拒絕全部` 會先產生 5 分鐘確認碼；只有同一管理者輸入對應的確認指令才會執行，確認碼消耗後不可重用。批次只處理 `PENDING_APPROVAL` 且 `Enabled=false` 的 Users。
+
+使用者私訊 `紀錄` 或 `查詢紀錄` 可取得 10 分鐘查詢連結。查詢中心讀取自己的備份 Sheet；群組 owner 也只能從私訊查詢自己 Sheet 中的群組紀錄。群組內輸入查詢指令不會產生連結。若要手動驗證頁面，預期標題為「LINE 記錄搜尋中心」，可用日期、關鍵字與類型篩選，且不顯示 LINE userId、groupId 或 Google Email。
 
 輪替 `BIND_TOKEN_SECRET` 只會讓尚未完成的舊 Bind Token 失效，不會改變既有 lineUserHash；輪替 `WORKER_GAS_SHARED_SECRET` 只影響 Worker envelope 驗證。兩端更新金鑰時仍應安排一致的切換時點，避免短暫驗證失敗。
 
@@ -75,6 +77,9 @@
 4. 把該 URL 設到 Script Property `APP_BASE_URL`，並稍後設為 Cloudflare `GAS_ENDPOINT_URL`。不要 Commit。
 5. 瀏覽 `/exec`，預期只看到 `{"status":"ok"}`，不會顯示設定值。
 6. 每次改 GAS 程式後需建立新版本或編輯 deployment 指向新版本；只儲存編輯器不會更新既有 deployment。
+7. 每次 `clasp push --force` 並更新 Web App 版本後，在 Apps Script 編輯器執行全域函式 `testOwnerAuthorizationHealth`。若跳出 Review Permissions，完成管理者授權後重新執行；預期 Logger 顯示 `PASS testOwnerAuthorizationHealth`，再測試 LINE `說明`。
+
+若舊版 Users 有 `Enabled=true` 但 `ApprovalStatus` 空白，可由管理者手動執行 `migrateEnabledUsersToApproved`。函式只補上 `APPROVED`，不處理停用／拒絕／待審核使用者，也不刪除資料或 OAuth Token；執行前後 Logger 會顯示更新筆數。
 
 ## 6. 建立邀請碼
 
@@ -110,3 +115,9 @@ BindingSessions 支援 `PENDING`、`AUTHORIZED`、`PROVISIONING`、`COMPLETED` �
 ## Script Properties 容量
 
 Apps Script Properties 有單一值與總容量限制。OAuth2 Library 會把每位使用者的 Access／Refresh Token 分開放在 `LineUser_<hash>` Service storage；少量私人使用可行，但不可擴成公開服務。定期在 Apps Script Executions 檢查配額錯誤，且絕對不要輸出 Properties 內容。
+
+## 群組查詢更新後固定健康檢查
+
+每次 `clasp push --force` 並將既有 GAS Web App 更新到新版本後，管理者必須先在 Apps Script 編輯器手動執行全域函式 `testOwnerAuthorizationHealth`。若畫面出現 Google Review Permissions，完成授權後再次執行，Logger 應顯示 `PASS testOwnerAuthorizationHealth`。接著私訊 Bot 測試 `說明`，再到已綁定群組測試 `說明` 與 `備份清單`；預期群組只有摘要，不會公開 Drive 或查詢中心連結。
+
+群組完整查詢使用 `群組紀錄 YYYY-MM`，多個群組時再附 `g_xxxxxxxx` 安全代號。Bot 回覆的是 GAS `/exec?route=q&id={shortCode}` 的 10 分鐘短連結，不包含長 Token；此流程沿用既有 `drive.file` scope，不新增 OAuth scope。舊列缺少「群組識別」時，符合唯一名稱條件才會相容查詢；管理者可手動執行 `migrateLegacyGroupRecordHashes()` 補齊。

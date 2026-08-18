@@ -17,6 +17,11 @@
 13. 自助綁定的管理者審核目前是 LINE 指令流程，依賴 `ADMIN_LINE_USER_HASHES` 事先填入正確的 64 位識別雜湊；審核代號只取雜湊前綴，若發生極低機率碰撞會拒絕更新並要求管理者重新查詢。批次與整批操作仍沒有獨立管理者後台。
 14. 自助綁定只會在 `ENABLE_SELF_SERVICE_BINDING=true` 時接受無邀請碼的 `綁定`。若屬性未設定或設為 `false`，系統仍只接受既有的 `綁定 <邀請碼>` 流程；這是為了讓既有部署能明確選擇啟用新流程。
 15. 自助流程完成 OAuth 與資源初始化後才進入 `PENDING_APPROVAL`；若初始化失敗，Session 會保留為可恢復狀態，使用者不會出現在審核清單，需先由管理者執行既有恢復流程。
+16. `npm audit --audit-level=high` 目前回報 `nanoid@3.3.16` 的 high advisory；它是 Vitest → Vite → PostCSS 的開發相依套件，不會被 Wrangler 打包進 Worker runtime。升級需評估測試工具相容性，本輪不執行可能帶來 breaking change 的自動修復；部署前仍應在依賴升級後重新執行完整測試。
+
+17. 群組備份摘要與完整查詢依賴新版 Sheet 的「群組識別」欄位。舊 Sheet 會在下一次初始化／寫入時於最右側補欄，舊列不回填；摘要只在唯一群組名稱可安全比對時 fallback，完整查詢若缺欄會提示只能查詢新版本紀錄。
+18. 群組摘要讀取 owner 的 Google Sheet，仍受 `drive.file`、Apps Script 執行時間與 Sheets API 配額限制；摘要只列最新 5 筆，完整查詢才顯示 Drive 連結。
+19. 群組完整查詢目前使用 GAS `/exec?route=q&id={shortCode}` 短連結，shortCode 只保存 HMAC 雜湊並在 10 分鐘後失效；舊版長 Token 仍可相容驗證，但 Bot 不再產生長連結。舊列缺少群組識別時，名稱 fallback 僅在 owner／管理者、owner Sheet 與唯一名稱條件成立時啟用；同名或不確定資料會拒絕查詢。`migrateLegacyGroupRecordHashes()` 需由管理者手動執行，且只補唯一可判斷列。
 
 ## 必須在正式帳號人工驗證
 
@@ -28,6 +33,7 @@
 - `drive.file` 對由應用程式建立之 Sheet 的 Sheets API 讀寫。
 - 20 MiB 預設上限在實際 Apps Script 帳號配額與網路條件下的成功率；若刻意提高到 45 MiB，視為高風險壓力測試。
 - Queue 重試、DLQ、Reply Token 逾期與 Cloudflare 免費方案目前配額。
+- 重新授權流程已限制必須使用原本綁定的 Google Subject；本機只能驗證指令解析與資源重用 helper，實際 OAuth callback、Token 儲存與 Google 帳號選擇仍需由管理者以測試使用者手動驗證。
 - `JOB_IN_PROGRESS` 不寫 Errors、不改 FAILED、PROCESSING 租約回收、FAILED Job 沿用 DriveFileId、Drive appProperties 查找及清理函式目前只能由 Apps Script 手動測試及實際管理 Sheet 驗證；本機已完成 GAS 語法與 Worker retry／ack 邏輯測試。
 - Google／LINE／Cloudflare UI 名稱可能隨平台改版，文件以功能名稱與預期結果輔助定位。
 

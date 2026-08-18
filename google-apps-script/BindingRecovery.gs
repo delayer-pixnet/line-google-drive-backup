@@ -11,6 +11,12 @@ function provisionAuthorizedBinding_(lineUserHash, session) {
     var accessToken = service.getAccessToken();
     var profile = getGoogleUserProfile_(accessToken);
     var existing = findUserByHash_(lineUserHash);
+    var isExistingUserReauthorization = Boolean(
+      !session.InviteCodeHash && existing && existing.GoogleSubjectId
+    );
+    if (isExistingUserReauthorization && existing.GoogleSubjectId !== profile.sub) {
+      throw createAppError_('OAUTH_REAUTH_ACCOUNT_MISMATCH', false, '請使用原本綁定的 Google 帳號完成重新授權。');
+    }
     var reusableExisting = existing && existing.GoogleSubjectId === profile.sub ? existing : null;
     var resources = hasCompleteUserResources_(reusableExisting)
       ? {

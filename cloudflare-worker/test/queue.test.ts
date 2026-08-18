@@ -21,8 +21,10 @@ const queueJob: QueueJob = {
   webhookEventId: "evt-queue-001",
   messageId: sensitiveValues.messageId,
   messageType: "text",
-  lineUserId: sensitiveValues.lineUserId,
-  groupId: null,
+  lineUserHash: "a".repeat(64),
+  groupIdHash: null,
+  senderDisplayName: "測試使用者",
+  groupDisplayName: null,
   replyToken: sensitiveValues.replyToken,
   timestamp: 1_785_456_000_000,
   fileName: null,
@@ -252,6 +254,32 @@ describe("Queue consumer", () => {
     expect(current.retry).not.toHaveBeenCalled();
   });
 
+  it("紀錄查詢只使用 Reply API，Reply 失效也不改用 Push", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        ok: true,
+        replyMessage: "請開啟查詢連結。",
+      }))
+      .mockResolvedValueOnce(Response.json(
+        { message: "Invalid reply token" },
+        { status: 400 },
+      ));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+    const recordsMessage = {
+      ...current.message,
+      body: { ...queueJob, command: "records", shouldSave: false },
+    } as unknown as Message<QueueJob>;
+
+    await processQueueMessage(recordsMessage, createEnv(true));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/message/push"))).toBe(false);
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
   it("群組附件成功不回覆以避免洗版", async () => {
     const fetchMock = vi.fn().mockResolvedValue(Response.json({
       ok: true,
@@ -265,7 +293,8 @@ describe("Queue consumer", () => {
       body: {
         ...queueJob,
         messageType: "image",
-        groupId: "C-group-sensitive",
+        groupIdHash: "b".repeat(64),
+        groupDisplayName: "測試群組",
         rawText: null,
       },
     } as unknown as Message<QueueJob>;
@@ -361,51 +390,45 @@ describe("Queue consumer", () => {
     expect(current.retry).not.toHaveBeenCalled();
   });
 
-  it("Reply Token 失效且 fallback 開啟時，Push 成功後仍只 ack", async () => {
+  it("即使 fallback 設定開啟，Queue metadata 沒有 raw recipient 也不呼叫 Push", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ ok: true, replyMessage: "綁定完成。" }))
       .mockResolvedValueOnce(Response.json(
         { message: "Invalid reply token" },
         { status: 400 },
       ))
-      .mockResolvedValueOnce(new Response("", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const current = createMessage();
 
     await processQueueMessage(current.message, createEnv(true));
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/message/push");
-    const pushInit = fetchMock.mock.calls[2]?.[1] as RequestInit;
-    expect(JSON.parse(typeof pushInit.body === "string" ? pushInit.body : "")).toEqual({
-      to: sensitiveValues.lineUserId,
-      messages: [{ type: "text", text: "綁定完成。" }],
-    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/message/push"))).toBe(false);
     expect(current.ack).toHaveBeenCalledOnce();
     expect(current.retry).not.toHaveBeenCalled();
   });
 
-  it("Push 失敗不會重新執行備份或重試 Queue", async () => {
+  it("Reply 失敗不會重新執行備份或重試 Queue", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ ok: true, replyMessage: "綁定完成。" }))
       .mockResolvedValueOnce(Response.json(
         { message: "Invalid reply token" },
         { status: 400 },
       ))
-      .mockResolvedValueOnce(new Response("", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
     const current = createMessage();
 
     await processQueueMessage(current.message, createEnv(true));
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(current.ack).toHaveBeenCalledOnce();
     expect(current.retry).not.toHaveBeenCalled();
     const serializedLogs = logOutput.join("\n");
     for (const sensitiveValue of Object.values(sensitiveValues)) {
       expect(serializedLogs).not.toContain(sensitiveValue);
     }
-    expect(serializedLogs).toContain("LINE_PUSH_FAILED");
+    expect(serializedLogs).toContain("LINE_REPLY_TOKEN_INVALID");
   });
 
   it("一般成功附件沒有 replyMessage 時不會自動 Push", async () => {

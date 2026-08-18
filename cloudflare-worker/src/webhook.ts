@@ -1,5 +1,11 @@
 import { createBindToken, hmacSha256Hex } from "./crypto";
 import { isOverFileSizeLimit, parseCommand } from "./parsing";
+import {
+  fallbackDisplayName,
+  getGroupDisplayName,
+  getGroupMemberDisplayName,
+  getPrivateDisplayName,
+} from "./line-client";
 import type {
   CommandName,
   QueueJob,
@@ -61,6 +67,7 @@ function getSource(event: Record<string, unknown>): {
 
 async function parseEvent(
   eventValue: unknown,
+  lineChannelAccessToken: string,
   identifierHashSecret: string,
   bindTokenSecret: string,
   bindTokenTtlSeconds: number,
@@ -131,7 +138,7 @@ async function parseEvent(
   }
 
   const bindToken =
-    command === "bind" && source.lineUserId !== null
+    (command === "bind" || command === "reauthorize") && source.lineUserId !== null
       ? await createBindToken(
           await hmacSha256Hex(identifierHashSecret, source.lineUserId),
           bindTokenSecret,
@@ -140,14 +147,32 @@ async function parseEvent(
         )
       : null;
 
+  const lineUserHash = source.lineUserId === null
+    ? null
+    : await hmacSha256Hex(identifierHashSecret, source.lineUserId);
+  const groupIdHash = source.groupId === null
+    ? null
+    : await hmacSha256Hex(identifierHashSecret, source.groupId);
+  const shouldLookupDisplayNames = eventType === "message";
+  const senderDisplayName = shouldLookupDisplayNames && source.lineUserId !== null
+    ? await (source.isGroup && source.groupId !== null
+      ? getGroupMemberDisplayName(lineChannelAccessToken, source.groupId, source.lineUserId)
+      : getPrivateDisplayName(lineChannelAccessToken, source.lineUserId))
+    : null;
+  const groupDisplayName = shouldLookupDisplayNames && source.groupId !== null
+    ? await getGroupDisplayName(lineChannelAccessToken, source.groupId)
+    : null;
+
   return {
     schemaVersion: 1,
     eventType,
     webhookEventId,
     messageId,
     messageType,
-    lineUserId: source.lineUserId,
-    groupId: source.groupId,
+    lineUserHash,
+    groupIdHash,
+    senderDisplayName: senderDisplayName ?? fallbackDisplayName(lineUserHash),
+    groupDisplayName,
     replyToken,
     timestamp,
     fileName,
@@ -162,6 +187,7 @@ async function parseEvent(
 
 export async function parseWebhookBody(
   parsedBody: unknown,
+  lineChannelAccessToken: string,
   identifierHashSecret: string,
   bindTokenSecret: string,
   bindTokenTtlSeconds: number,
@@ -175,6 +201,7 @@ export async function parseWebhookBody(
     parsedBody.events.slice(0, 100).map((event) =>
       parseEvent(
         event,
+        lineChannelAccessToken,
         identifierHashSecret,
         bindTokenSecret,
         bindTokenTtlSeconds,

@@ -129,11 +129,78 @@ function getUserApprovalStatus_(user) {
     return USER_APPROVAL_STATUS_.REJECTED;
   }
   // 舊版 Users 沒有 ApprovalStatus；Enabled=true 的既有使用者視為已核准。
-  return user.Enabled === true ? USER_APPROVAL_STATUS_.APPROVED : USER_APPROVAL_STATUS_.REJECTED;
+  return isEnabledUserValue_(user.Enabled)
+    ? USER_APPROVAL_STATUS_.APPROVED
+    : USER_APPROVAL_STATUS_.REJECTED;
+}
+
+function isEnabledUserValue_(value) {
+  return value === true || value === 1 ||
+    (typeof value === 'string' && value.trim().toLowerCase() === 'true');
+}
+
+function getUserBindingState_(lineUserHash) {
+  var user = findUserByHash_(lineUserHash);
+  return {
+    user: user,
+    hasUser: Boolean(user),
+    enabled: Boolean(user && isEnabledUserValue_(user.Enabled)),
+    approvalStatus: getUserApprovalStatus_(user)
+  };
 }
 
 function isApprovedEnabledUser_(user) {
-  return Boolean(user && user.Enabled === true && getUserApprovalStatus_(user) === USER_APPROVAL_STATUS_.APPROVED);
+  return Boolean(
+    user &&
+    isEnabledUserValue_(user.Enabled) &&
+    getUserApprovalStatus_(user) === USER_APPROVAL_STATUS_.APPROVED
+  );
+}
+
+/** 管理者手動執行；補齊舊版 Enabled=true 使用者的核准狀態，不修改其他資料。 */
+function migrateEnabledUsersToApproved() {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var spreadsheet = getAdminSpreadsheet_();
+    var sheet = spreadsheet.getSheetByName('Users');
+    if (!sheet) {
+      throw createAppError_('ADMIN_SHEET_MISSING', false, '管理試算表尚未初始化。');
+    }
+    var lastColumn = Math.max(sheet.getLastColumn(), ADMIN_SHEET_HEADERS_.Users.length);
+    var headerValues = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+    var approvalColumn = headerValues.indexOf('ApprovalStatus') + 1;
+    if (approvalColumn === 0) {
+      // getLastColumn() 可能包含為了相容性預留的空白欄；優先填入第一個空標題，避免多插一欄。
+      var firstEmptyHeader = headerValues.indexOf('');
+      approvalColumn = firstEmptyHeader >= 0 ? firstEmptyHeader + 1 : headerValues.length + 1;
+      sheet.getRange(1, approvalColumn).setValue('ApprovalStatus');
+      headerValues[approvalColumn - 1] = 'ApprovalStatus';
+    }
+    var enabledColumn = headerValues.indexOf('Enabled') + 1;
+    if (enabledColumn === 0) {
+      throw createAppError_('ADMIN_HEADERS_MISMATCH', false, 'Users 欄位尚未初始化。');
+    }
+    var rowCount = Math.max(0, sheet.getLastRow() - 1);
+    var updates = [];
+    if (rowCount > 0) {
+      var rows = sheet.getRange(2, 1, rowCount, Math.max(approvalColumn, enabledColumn)).getValues();
+      rows.forEach(function (row, index) {
+        var approvalValue = row[approvalColumn - 1];
+        if (!approvalValue && isEnabledUserValue_(row[enabledColumn - 1])) {
+          updates.push(index + 2);
+        }
+      });
+    }
+    Logger.log('migrateEnabledUsersToApproved 開始：預計更新 ' + updates.length + ' 筆。');
+    updates.forEach(function (rowNumber) {
+      sheet.getRange(rowNumber, approvalColumn).setValue(USER_APPROVAL_STATUS_.APPROVED);
+    });
+    Logger.log('migrateEnabledUsersToApproved 完成：更新 ' + updates.length + ' 筆。');
+    return updates.length;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function getUserReviewCode_(lineUserHash) {

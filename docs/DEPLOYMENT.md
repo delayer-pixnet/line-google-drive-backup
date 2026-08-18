@@ -15,9 +15,12 @@
 - [ ] OAuth consent 已設定，測試帳號已加入 Test users。
 - [ ] OAuth Web Client redirect URI 是 Apps Script `/usercallback`。
 - [ ] OAuth2 Library 已加入，identifier 為 `OAuth2`。
-- [ ] 17 個 GAS Properties 已逐項核對；`DELETE_DRIVE_ON_UNSEND` 初期為 `false`、`JOB_PROCESSING_LEASE_SECONDS=600`，2 個保留天數已設定；若啟用自助綁定，`ENABLE_SELF_SERVICE_BINDING=true`、`REQUIRE_ADMIN_APPROVAL=true` 且 `ADMIN_LINE_USER_HASHES` 只填管理者雜湊。
+- [ ] GAS Properties 已逐項核對；`DELETE_DRIVE_ON_UNSEND` 初期為 `false`、`JOB_PROCESSING_LEASE_SECONDS=600`，2 個保留天數已設定；若啟用自助綁定，`ENABLE_SELF_SERVICE_BINDING=true`。`REQUIRE_ADMIN_APPROVAL=true` 表示需審核；若要自助綁定後立即啟用則設為 `false`。`ADMIN_LINE_USER_HASHES` 只填管理者雜湊。
 - [ ] 管理 Sheet 7 個工作表初始化成功；Jobs 包含 `LeaseExpiresAt`，BindingSessions 包含恢復狀態欄位。
 - [ ] GAS Web App 以管理者執行，Anyone 可呼叫；`/exec` health 正常。
+- [ ] 每次 GAS 同步並更新 Web App 版本後，先在 Apps Script 執行 `testOwnerAuthorizationHealth`；若出現 Review Permissions，完成授權後確認 Logger 顯示 `PASS testOwnerAuthorizationHealth`。
+- [ ] GAS 更新後依固定順序人工驗證：`testOwnerAuthorizationHealth` → Logger 出現 `PASS testOwnerAuthorizationHealth` → LINE 私訊 `說明` → 群組輸入 `說明` → 群組輸入 `備份清單`。預期群組只顯示摘要，不顯示 Drive 或查詢中心連結。
+- [ ] 舊版 Users 若 `Enabled=true` 且 `ApprovalStatus` 空白，先評估並手動執行 `migrateEnabledUsersToApproved`；確認只更新既有啟用使用者。
 
 預期結果：直接 GET 只顯示 `status=ok`；未帶 Worker HMAC 的 POST 會回安全錯誤，不會建立 Jobs。
 
@@ -44,7 +47,7 @@
 1. 若使用邀請碼模式，建立 1 次性邀請碼並綁定自己；若使用自助模式，先完成自助綁定並由管理者核准自己的安全化代號。
 2. 檢查自己的 Drive 資源與 Users 列。
 3. 傳文字、網址、`#標籤`、小圖片與小型一般檔案。
-4. 檢查 Sheet 16 欄、台北時間、Drive ID／連結與 Jobs COMPLETED。
+4. 檢查 Sheet 至少 17 欄（含「傳送者名稱」）、台北時間、Drive ID／連結與 Jobs COMPLETED。
 5. 確認 Jobs 有 `LeaseExpiresAt`，完成後該欄清空；執行 `testDriveEventIdempotencyKey`，並在受控重送同一 webhookEventId 時確認不新增第 2 份 Drive 檔案。`lineBackupEventKey` 屬 Drive appProperties，不會顯示在一般 Drive 網頁介面。
 6. 傳超限檔案；預期拒絕且不建立 Drive 檔案。
 7. 收回一則已備份訊息；預期 Sheet 標為「已收回」，Drive 檔案預設保留。
@@ -55,7 +58,12 @@
 2. 朋友私訊綁定自己的 Google 帳號，執行私訊隔離測試。
 3. 建一般群組並邀 Bot；擁有者輸入 `綁定群組`。
 4. 不同成員各傳 1 個附件。預期都進 owner Drive，且 sender 欄是各自不同的 HMAC。
-5. 在群組傳一般聊天，預期不入 Queue／Sheet；提及 Bot 或 `#筆記` 才會保存。
+5. 由一般成員傳 `#筆記 測試內容`，預期寫入 owner Sheet 並可收到成功回覆；群組附件預設不回覆以避免洗版。
+6. 由非 owner 輸入 `解除群組`，預期回覆「只有群組備份擁有者可以操作此指令。」且 Groups 不變；owner 或管理者才可解除。
+7. 在群組輸入 `待審核`、`核准`、`拒絕` 或 `綁定`，預期只提醒改用私訊，不執行審核或產生 OAuth 連結；群組 `狀態` 僅顯示群組是否已綁定。
+8. 私訊 `紀錄`、`查詢紀錄` 或群組 owner 私訊 `群組紀錄`，預期收到 10 分鐘 GAS 短查詢連結（只有 `route=q&id=短碼`）；在群組輸入同一指令只收到改用私訊的提示。若舊列缺少「群組識別」，只有名稱唯一時才會 fallback。
+9. 私訊 `容量`、`空間` 或 `Drive容量`，預期看到自己的 Drive quota 與備份資料夾估算；私訊 `群組容量`，預期只列出自己擁有的群組備份資料夾。群組輸入 `容量` 只收到改用私訊提示。
+10. 在群組傳一般聊天，預期不入 Queue／Sheet；提及 Bot 或 `#筆記` 才會保存。
 
 ## G. 完成後
 

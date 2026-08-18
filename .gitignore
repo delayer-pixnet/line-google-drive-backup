@@ -5,10 +5,12 @@ cloudflare-worker/.wrangler/
 cloudflare-worker/coverage/
 cloudflare-worker/.dev.vars
 cloudflare-worker/wrangler.jsonc
+.dev.vars
 
 # Google Apps Script／clasp 本機檔案
 google-apps-script/.clasp.json
 google-apps-script/.clasprc.json
+.clasp.json
 
 # Secret 與本機設定
 .env
@@ -16,6 +18,10 @@ google-apps-script/.clasprc.json
 !.env.example
 *.local
 *.secret
+*.token
+**/client_secret_*.json
+**/GoogleSheet.txt
+外部資料/
 secrets/
 
 # 編輯器與作業系統

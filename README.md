@@ -12,13 +12,17 @@
 4. 複製 `.clasp.json.example` 為 `.clasp.json`，依 [Google Apps Script 設定](docs/GOOGLE_APPS_SCRIPT_SETUP.md) 加入 OAuth2 Library、Script Properties 並部署 Web App。
 5. 依 [部署流程](docs/DEPLOYMENT.md) 串接 Worker webhook，完成 LINE Verify 後先測試自己的帳號。
 
-本專案不會在一般程式修改時自動部署、建立遠端資源或執行 OAuth 同意；每次外部操作都必須由管理者明確手動執行。本輪依明確授權完成 GAS Web App 與 Worker 更新，但未修改 Secret、未建立邀請碼；完成驗證後建立自助綁定與管理者審核流程的穩定版本 Commit 並 Push 至 `main`。
+本專案不會在一般程式修改時自動部署、建立遠端資源或執行 OAuth 同意；每次外部操作都必須由管理者明確手動執行。部署或同步前仍須由管理者明確授權；本機工作區不應提交真實設定，也不會由程式自動 Commit／Push Git。
 
 ## 功能摘要
 
 - 私訊：圖片、影片、音訊與一般檔案進入自己的 Drive；一般文字與網址進入自己的備份 Sheet。
-- 群組：附件進入群組擁有者的 Drive；文字只在提及 Bot、使用 `#筆記` 或指定指令時處理。
-- 指令：`綁定`（自助申請）、`綁定 <邀請碼>`、`狀態`、`解除綁定`、`綁定群組`、`解除群組`、`#筆記 <內容>`、`說明`；管理者另有 `待審核`、`核准／拒絕 <編號[,編號]>`、`核准／拒絕 全部`（需二次確認）。
+- 備份紀錄會保存清理後的「傳送者名稱」與安全化「傳送者識別」；LINE Profile 失敗時使用 hash 前綴 fallback，不會中斷備份。
+- 群組：任一成員的附件與 `#筆記` 進入群組擁有者的 Drive／Sheet；一般文字只在提及 Bot、使用 `#筆記` 或指定指令時處理。群組管理與個人綁定指令受 owner／管理者及私訊限制。
+- 群組清單：群組內可用 `備份清單`、`今日備份清單`、`本週備份清單`、`N月備份清單` 或 `YYYY-MM 備份清單` 查詢摘要；owner／管理者私訊 `群組紀錄 YYYY-MM g_xxxxxxxx` 取得 10 分鐘有效短查詢連結。舊群組紀錄缺少識別時，僅在名稱唯一且由 owner／管理者查詢時相容 fallback。
+- 指令：`綁定`（自助申請）、`綁定 <邀請碼>`、`重新授權`（更新既有 OAuth Token、不重建 Drive／Sheet）、`狀態`、`容量／空間／Drive容量`、`群組容量`、`紀錄／查詢紀錄`、`解除綁定`、`綁定群組`、`解除群組`、`#筆記 <內容>`、`說明`；管理者另有 `待審核`、`核准／拒絕 <編號[,編號]>`、`核准／拒絕 全部`（需二次確認）。
+- 自助綁定：`REQUIRE_ADMIN_APPROVAL=true` 時等待管理者核准；設為 `false` 時 OAuth 與 Drive 初始化完成即自動核准並啟用備份。
+- `紀錄` 查詢中心只在私訊產生 10 分鐘短效連結，資料限制在目前使用者自己的備份 Sheet；群組成員不能在群組中開啟完整紀錄。
 - 防護：LINE 原始 Body 簽章、Worker→GAS HMAC、防重播、工作租約、Drive `appProperties` 冪等、邀請碼雜湊與短效綁定 Token。
 - 金鑰分工：`IDENTIFIER_HASH_SECRET` 只建立長期識別雜湊；`BIND_TOKEN_SECRET` 只簽署短效綁定 Token；`WORKER_GAS_SHARED_SECRET` 只驗證 Worker→GAS envelope。首次上線後不可直接輪替 `IDENTIFIER_HASH_SECRET`。
 - 預設單檔上限為 20 MiB；45 MiB 屬 Apps Script 高風險設定且不保證成功。

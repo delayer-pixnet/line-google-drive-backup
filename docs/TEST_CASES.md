@@ -28,7 +28,7 @@ npm run build
 | W10 | 多筆／整批審核指令解析 | `核准 1,2,3`、`拒絕 1,2,3`、`核准全部`、確認指令解析正確 |
 | W11 | `#標籤` 與網址 | 去重、移除句尾標點、排除控制標籤 |
 | W12 | 安全 Log | 只輸出白名單欄位，不含測試 Secret |
-| W13 | 群組文字規則 | 一般聊天忽略，mention 建立工作 |
+| W13 | 群組文字規則 | 一般聊天忽略，mention／`#筆記` 建立工作；群組管理指令交由 GAS 做權限檢查 |
 | W14 | GAS client 正常 JSON 與無效 JSON | 正常回應解析；非 JSON 回 `GAS_INVALID_RESPONSE` |
 | W15 | GAS HTTP 500／400 | 500 標示 retryable；400 標示 non-retryable |
 | W16 | LINE Reply／Push 成功與失敗 | 成功完成；非 2xx 回安全錯誤，且一般 400／Channel Token 401 不誤判為 Reply Token 無效 |
@@ -42,6 +42,12 @@ npm run build
 | W24 | PROCESSING 有效租約 | `JOB_IN_PROGRESS` 使用 GAS 指定延遲呼叫 retry，絕不 ack |
 | W25 | 無效租約延遲 | 回退 60 秒 retry，不 ack |
 | W26 | 原處理程序稍後完成 | 第一次延後，後續 GAS 回 COMPLETED／`ok=true` 時正常 ack |
+| W27 | 群組附件與筆記 | 群組附件排入 Queue；`#筆記` 解析為 note，附件成功不自動回覆 |
+| W28 | 自助綁定設定分流 | `REQUIRE_ADMIN_APPROVAL=false` 寫入 APPROVED／Enabled=true；`true` 維持 PENDING／停用 |
+| W29 | 紀錄指令解析 | `紀錄`、`查詢紀錄` 解析為 records；群組不得產生查詢連結 |
+| W30 | Profile metadata | 私訊／群組 Profile 成功時帶入安全顯示名稱；API 失敗仍排入備份，Queue 不含 raw userId／groupId |
+| W31 | 容量指令解析 | `容量`、`空間`、`Drive容量` 解析為 `quota`；`群組容量` 解析為 `groupQuota` |
+| W32 | 重新授權指令解析 | `重新授權` 只在私訊產生短效 OAuth Bind Token；Token 不含原始 LINE userId |
 
 Vitest 預期顯示所有 test files 與 tests passed；coverage 是風險參考，不設置虛假的 100% 門檻。
 
@@ -59,7 +65,7 @@ Vitest 預期顯示所有 test files 與 tests passed；coverage 是風險參考
 | `testUrlExtraction` | URL 解析 | 擷取 2 個網址，不含中文句號／逗號 |
 | `testInitializeAdminSpreadsheet` | 7 個管理工作表 | 每個工作表標頭正確，包含 BindingSessions |
 | `testCreateUserDriveRootFolder` | 使用者 Drive API | 授權帳號出現 `LINE 備份手動測試_...` |
-| `testCreatePersonalBackupSheet` | 使用者 Sheets API | 測試資料夾內出現 16 欄 Sheet |
+| `testCreatePersonalBackupSheet` | 使用者 Sheets API | 測試資料夾內出現至少 17 欄 Sheet，包含「傳送者名稱」 |
 | `testWebhookEventDeduplication` | webhookEventId 去重 | 第一次 claimed，第二次拒絕，Jobs 只有 1 列 |
 | `testJobRetryAfterSecondsBoundaries` | 租約剩餘時間與邊界 | 加 5 秒緩衝，並限制在 30 至 900 秒 |
 | `testActiveProcessingLeaseCannotBeReclaimed` | 未過期工作租約 | `PROCESSING` 不可重新取得，並回傳 LeaseExpiresAt 與 retryAfterSeconds |
@@ -80,6 +86,31 @@ Vitest 預期顯示所有 test files 與 tests passed；coverage 是風險參考
 | `testBatchApprovalHelpers` | 多筆審核與重複處理 | `1,2,3` 只處理目前 PENDING／停用使用者，已核准／已拒絕會略過 |
 | `testApprovalConfirmationExpiry` | 整批確認碼 | 確認碼 5 分鐘期限、管理者綁定與操作綁定正確 |
 | `testApprovalConfirmationFlow` | 整批確認流程 | 同一管理者第一次確認成功，重送同一確認碼遭拒絕 |
+| `testGroupPermissionHelpers` | 群組權限分流 | 一般成員可交內容給已核准 owner；只有 owner／管理者可操作群組管理指令；群組狀態不含個人資訊 |
+| `testBackupSheetHeaderMappingHelpers` | Sheet 欄位相容 | 舊欄位只在右側補「傳送者名稱」等缺欄；寫入依標題名稱 mapping，公式前綴安全處理 |
+| `testBackupRecordDisplayNameHelpers` | 名稱寫入 | 私訊文字／檔案、群組附件／筆記都使用實際傳送者名稱與 hash，不使用 Bot 識別 |
+| `testDriveQuotaHelpers` | 容量輔助邏輯 | bytes／使用率格式化、無上限、原生文件無 size、檔案加總與 600 秒快取 |
+| `testDriveQuotaUserBindingCompatibility` | 容量使用者相容性 | 舊版 `Enabled=true`／空白核准狀態、APPROVED、PENDING、停用、Token 遺失與 Drive 權限不足分流 |
+| `testOAuthServiceConsistency` | OAuth Service 與資源重用 | 容量、紀錄、個人備份與 Drive 初始化使用同一 `LineUser_<lineUserHash>` Service；既有核准使用者重新授權後保留狀態與資源 |
+| `testOAuthTokenAvailableForConfiguredUser` | 重新授權後 Token 讀取 | 先設定 `TEST_LINE_USER_HASH` 並完成 `重新授權`；只記錄安全狀態欄位，確認共用 Service 可讀取 Token |
+| `testOwnerAuthorizationHealth` | GAS 部署後授權健康檢查 | 只讀取必要設定與管理 Sheet，安全外部請求及執行環境可用；成功記錄 `PASS testOwnerAuthorizationHealth` |
+| `testOwnerAuthorizationHealthHelpers` | 健康檢查靜態安全檢查 | 必要設定清單與全域手動函式存在，不輸出設定值 |
+| `testRoleBasedHelpMessages` | 說明依身分 | 一般使用者不顯示管理指令；管理者顯示審核指令；群組只顯示群組規則 |
+| `testRecordQueryTokenHelpers` | 查詢 Token | Token 期限、使用者雜湊綁定與過期拒絕通過；完整 Token 不寫入測試訊息 |
+| `testRecordQueryDisplaySafety` | 查詢結果遮罩 | 結果不含 LINE userId、Google Email 或完整識別雜湊 |
+| `testGroupBackupQueryHelpers` | 群組摘要查詢 | 日期解析、摘要最多 5 筆、群組安全代號與 Drive URL 遮罩 |
+| `testGroupRecordQueryTokenHelpers` | 群組完整紀錄 Token | Token 版本、lineUserHash／groupIdHash 綁定與不暴露完整雜湊 |
+| `testRecordQueryShortCodeHelpers` | 群組／個人短查詢連結 | 10 碼 URL-safe、短碼不含識別資訊、Script Properties 只保存 HMAC 雜湊 |
+| `testLegacyGroupRecordSafetyHelpers` | 舊群組紀錄相容 | owner／群組名稱唯一性、來源類型與空識別條件；同名群組拒絕 fallback |
+
+## 群組備份清單人工案例
+
+- 在已綁定群組輸入 `備份清單`、`今日備份清單`、`本週備份清單`、`8月備份清單` 與 `2026-08 備份清單`；預期只看到摘要與最多 5 筆，沒有 Drive 或查詢 URL。
+- 在未綁定群組輸入 `備份清單`；預期看到「本群組尚未綁定，請由已完成個人綁定的使用者輸入『綁定群組』。」。
+- 一般成員私訊 `群組紀錄 2026-08`；預期沒有可查詢群組。owner 私訊同指令；單一群組直接取得 10 分鐘連結，多群組需再輸入安全代號。
+- 以其他使用者或其他群組使用短連結；預期遭拒絕。shortCode 過期後預期顯示「查詢連結已過期，請回 LINE 重新輸入『群組紀錄』取得新連結。」
+- 以唯一群組名稱的舊 group 列查詢；預期頁面顯示「部分舊紀錄因早期版本缺少群組識別，已依群組名稱相容查詢。」；建立同 owner 同名群組後重試，預期拒絕 fallback。
+- 管理者手動執行 `migrateLegacyGroupRecordHashes()`；預期只補唯一可判斷列，Logger 只顯示掃描、成功、略過與不確定筆數。
 
 `testCreateUserDriveRootFolder`、`testCreatePersonalBackupSheet` 與 `testBindingProvisioningReusesResources` 會使用自己的 Google 授權並可能真的建立或重用 Drive／Sheet 資源，但不呼叫朋友帳號或正式 LINE API。先把自己的 Users `LineUserHash` 暫時設成 Script Property `TEST_LINE_USER_HASH`；確認冪等測試的兩次回傳 ID 相同。前 2 項會建立名稱含「手動測試」的資源；冪等測試可能重用標準「LINE 自動備份」資源，不可把它當成測試垃圾刪除。測試後只刪除明確標示的測試資源與該 Property。
 
@@ -99,8 +130,8 @@ Jobs、邀請與 BindingSession 手動測試會在管理 Sheet 寫入以 `manual
 | E08 | 收回文字／附件 | Sheet 標「已收回」；預設保留 Drive 檔 |
 | E09 | 群組一般聊天 | 不寫入 Sheet |
 | E10 | 群組 mention／`#筆記` | 寫入 owner Sheet |
-| E11 | 群組多成員附件 | 只進 owner Drive，sender hash 不同 |
-| E12 | 非 owner 解除群組 | 拒絕，不改 Groups |
+| E11 | 群組多成員附件 | 任何成員都可提供內容，只進 owner Drive，sender hash 不同 |
+| E12 | 非 owner 解除群組 | 回覆拒絕，不改 Groups；owner／管理者可解除 |
 | E13 | 解除個人綁定 | Token reset、Users false、既有檔案保留 |
 | E14 | Google 安全頁撤銷後傳檔 | 顯示需重新綁定或安全錯誤，不洩漏 Token |
 | E15 | 模擬 OAuth 成功後初始化暫時失敗，再執行管理恢復 | OAuth Token 與部分資源保留；`resumeAuthorizedBinding` 重用資源，完成後邀請只扣 1 次 |
@@ -109,5 +140,8 @@ Jobs、邀請與 BindingSession 手動測試會在管理 Sheet 寫入以 `manual
 | E18 | 自助綁定與管理者核准 | 私訊 `綁定` 取得連結；OAuth 完成後 Users 為 `PENDING_APPROVAL`／停用，管理者以 `待審核`、`核准 <編號>` 後才可備份 |
 | E19 | 多筆審核 | 管理者輸入 `核准 1,2,3` 或 `拒絕 1,2,3`，回覆成功／略過／失敗筆數 |
 | E20 | 整批審核二次確認 | `核准全部`／`拒絕全部` 先回數量與確認碼；只有同一管理者在 5 分鐘內輸入正確確認指令才執行 |
+| E21 | 群組管理與私訊限制 | 群組成員不可覆蓋／解除綁定；審核與個人綁定在群組只回覆改用私訊；群組 `狀態` 只顯示綁定狀態 |
+| E22 | 容量查詢 | 私訊 `容量` 顯示 Drive quota 與備份估算；未綁定提示先綁定；群組輸入只提示改用私訊；`群組容量` 僅顯示自己的群組 |
+| E23 | 既有使用者重新授權 | 私訊 `重新授權` 更新同一 OAuth Service Token；Users、Drive、Sheet、Groups 不新增或重建；不同 Google 帳號遭拒絕 |
 
 驗收時只用無敏感內容的小型測試檔。預設先以 20 MiB 以下檔案驗收；若管理者刻意提高到 45 MiB，該壓力測試應放在最後，且結果不保證成功，需同時觀察 Apps Script Executions 與 Queue DLQ。

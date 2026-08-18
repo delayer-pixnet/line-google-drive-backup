@@ -2,8 +2,6 @@ import { verifyLineSignature } from "./crypto";
 import { ExternalApiError, callGas } from "./gas-client";
 import { jsonResponse } from "./http";
 import {
-  isInvalidReplyTokenError,
-  pushTextMessage,
   replyTextMessage,
 } from "./line-client";
 import { safeLog } from "./logger";
@@ -46,6 +44,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   try {
     jobs = await parseWebhookBody(
       parsedBody,
+      requireNonEmpty(env.LINE_CHANNEL_ACCESS_TOKEN, "LINE_CHANNEL_ACCESS_TOKEN"),
       requireNonEmpty(env.IDENTIFIER_HASH_SECRET, "IDENTIFIER_HASH_SECRET"),
       requireNonEmpty(env.BIND_TOKEN_SECRET, "BIND_TOKEN_SECRET"),
       parsePositiveInteger(env.BIND_TOKEN_TTL_SECONDS, 600, 3600),
@@ -128,7 +127,7 @@ export async function processQueueMessage(
     const isBackupSuccessReply = gasResult.backupSuccessReply === true;
     const isGroupBackupAttachment =
       isBackupSuccessReply &&
-      message.body.groupId !== null &&
+      message.body.groupIdHash !== null &&
       message.body.command !== "note";
     const shouldSendReply =
       gasResult.replyMessage !== undefined &&
@@ -152,38 +151,7 @@ export async function processQueueMessage(
             ? error.errorCode
             : "LINE_REPLY_FAILED",
         });
-        const pushRecipient = message.body.groupId ?? message.body.lineUserId;
-        if (
-          isInvalidReplyTokenError(error) &&
-          !isBackupSuccessReply &&
-          parseBooleanFlag(env.ENABLE_PUSH_FALLBACK, false) &&
-          pushRecipient !== null
-        ) {
-          try {
-            await pushTextMessage(
-              requireNonEmpty(
-                env.LINE_CHANNEL_ACCESS_TOKEN,
-                "LINE_CHANNEL_ACCESS_TOKEN",
-              ),
-              pushRecipient,
-              gasResult.replyMessage,
-            );
-            safeLog("info", {
-              component: "line",
-              status: "completed",
-              correlationId,
-            });
-          } catch (pushError: unknown) {
-            safeLog("warn", {
-              component: "line",
-              status: "failed",
-              correlationId,
-              errorCode: pushError instanceof ExternalApiError
-                ? pushError.errorCode
-                : "LINE_PUSH_FAILED",
-            });
-          }
-        }
+        // Queue metadata 不保存 raw userId／groupId，本流程只使用 Reply API。
       }
     }
     message.ack();

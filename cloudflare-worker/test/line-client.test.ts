@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pushTextMessage, replyTextMessage } from "../src/line-client";
+import {
+  fallbackDisplayName,
+  getGroupDisplayName,
+  getGroupMemberDisplayName,
+  getPrivateDisplayName,
+  pushTextMessage,
+  replyTextMessage,
+} from "../src/line-client";
 
 describe("LINE Reply client", () => {
   afterEach(() => {
@@ -67,5 +74,31 @@ describe("LINE Reply client", () => {
         errorCode: "LINE_PUSH_FAILED",
         retryable: true,
       });
+  });
+
+  it("可取得私訊與群組成員／群組顯示名稱，並清理公式前綴", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ displayName: "=危險名稱" }))
+      .mockResolvedValueOnce(Response.json({ displayName: "群組成員" }))
+      .mockResolvedValueOnce(Response.json({ groupName: "測試群組" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPrivateDisplayName("channel-token", "U-private"))
+      .resolves.toBe("'=危險名稱");
+    await expect(getGroupMemberDisplayName("channel-token", "C-group", "U-member"))
+      .resolves.toBe("群組成員");
+    await expect(getGroupDisplayName("channel-token", "C-group"))
+      .resolves.toBe("測試群組");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v2/bot/profile/U-private");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/member/U-member");
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain("/summary");
+  });
+
+  it("顯示名稱 API 失敗時回傳安全 fallback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("failed", { status: 403 })));
+
+    await expect(getPrivateDisplayName("channel-token", "U-private")).resolves.toBeNull();
+    expect(fallbackDisplayName("a".repeat(64))).toBe("user_aaaaaaaa");
+    expect(fallbackDisplayName(null)).toBe("unknown_user");
   });
 });

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <title>LINE 記錄搜尋中心</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif; }
+    body { margin: 0; padding: 24px; color: #1f2937; background: #f3f4f6; }
+    main { max-width: 960px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 12px; box-shadow: 0 4px 16px #00000012; }
+    h1 { margin-top: 0; font-size: 1.6rem; }
+    .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; align-items: end; }
+    label { display: flex; flex-direction: column; gap: 5px; font-size: .9rem; }
+    input, select, button { box-sizing: border-box; width: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; }
+    button { cursor: pointer; background: #2563eb; color: #fff; border-color: #2563eb; }
+    button.secondary { background: #fff; color: #374151; }
+    .actions { display: flex; gap: 8px; }
+    .status { margin: 16px 0; min-height: 1.5em; white-space: pre-wrap; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 9px 7px; text-align: left; vertical-align: top; }
+    th { background: #f8fafc; white-space: nowrap; }
+    td.message { min-width: 220px; white-space: pre-wrap; word-break: break-word; }
+    .sheet-link { margin-top: 16px; }
+    a { color: #1d4ed8; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>LINE 記錄搜尋中心</h1>
+  <p id="modeDescription">只會顯示目前 Google 帳號可存取的 LINE 備份紀錄。</p>
+  <section class="filters" aria-label="查詢條件">
+    <label>日期起
+      <input id="startDate" type="date">
+    </label>
+    <label>日期迄
+      <input id="endDate" type="date">
+    </label>
+    <label>關鍵字
+      <input id="keyword" type="search" maxlength="100" placeholder="傳送者、群組、檔名、訊息、網址或標籤">
+    </label>
+    <label>類型
+      <select id="type">
+        <option value="all">全部</option>
+        <option value="text">文字</option>
+        <option value="image">圖片</option>
+        <option value="video">影片</option>
+        <option value="audio">音訊</option>
+        <option value="file">檔案</option>
+        <option value="note">群組筆記</option>
+      </select>
+    </label>
+    <div class="actions">
+      <button id="searchButton" type="button">搜尋</button>
+      <button id="resetButton" type="button" class="secondary">重置</button>
+    </div>
+  </section>
+  <div id="status" class="status" role="status"></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>時間</th><th>名稱</th><th>群組名稱</th><th>傳送者名稱</th><th>類型</th><th>訊息</th><th>網址</th><th>標籤</th><th>備註</th><th>狀態</th></tr></thead>
+      <tbody id="results"><tr><td colspan="6">請輸入條件後按「搜尋」。</td></tr></tbody>
+    </table>
+  </div>
+  <div id="sheetLink" class="sheet-link"></div>
+</main>
+<script>
+  var queryToken = '<?= queryToken ?>';
+  var groupMode = <?= groupMode ? 'true' : 'false' ?>;
+  var queryStartDate = '<?= queryStartDate ?>';
+  var queryEndDate = '<?= queryEndDate ?>';
+  var statusElement = document.getElementById('status');
+  var resultsElement = document.getElementById('results');
+  var sheetLinkElement = document.getElementById('sheetLink');
+
+  function getFilters() {
+    return {
+      startDate: document.getElementById('startDate').value,
+      endDate: document.getElementById('endDate').value,
+      keyword: document.getElementById('keyword').value,
+      type: document.getElementById('type').value
+    };
+  }
+
+  function showError(error) {
+    statusElement.textContent = error && error.message
+      ? error.message
+      : '查詢失敗，請回 LINE 重新取得查詢連結。';
+  }
+
+  function renderResults(result) {
+    var rows = Array.isArray(result && result.rows) ? result.rows : [];
+    resultsElement.textContent = '';
+    if (rows.length === 0) {
+      var emptyRow = document.createElement('tr');
+      var emptyCell = document.createElement('td');
+      emptyCell.colSpan = 10;
+      emptyCell.textContent = '找不到符合條件的紀錄。';
+      emptyRow.appendChild(emptyCell);
+      resultsElement.appendChild(emptyRow);
+    } else {
+      rows.forEach(function (row) {
+        var tr = document.createElement('tr');
+        ['time', 'name', 'groupName', 'senderName', 'type', 'message', 'url', 'tags', 'note', 'status'].forEach(function (field) {
+          var td = document.createElement('td');
+          td.className = field === 'message' ? 'message' : '';
+          if (field === 'name' && row.driveLink) {
+            var link = document.createElement('a');
+            link.href = row.driveLink;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = row[field] || '開啟檔案';
+            td.appendChild(link);
+          } else {
+            td.textContent = row[field] || '';
+          }
+          tr.appendChild(td);
+        });
+        resultsElement.appendChild(tr);
+      });
+    }
+    sheetLinkElement.textContent = '';
+    if (result && result.spreadsheetUrl) {
+      var sheetLink = document.createElement('a');
+      sheetLink.href = result.spreadsheetUrl;
+      sheetLink.target = '_blank';
+      sheetLink.rel = 'noopener noreferrer';
+      sheetLink.textContent = '查看原始試算表';
+      sheetLinkElement.appendChild(sheetLink);
+    }
+    statusElement.textContent = (result && result.notice ? result.notice + '\n' : '') +
+      '找到 ' + rows.length + ' 筆紀錄。';
+  }
+
+  function search() {
+    statusElement.textContent = '查詢中…';
+    google.script.run
+      .withSuccessHandler(renderResults)
+      .withFailureHandler(showError)
+      .searchRecords(queryToken, getFilters());
+  }
+
+  function reset() {
+    document.getElementById('startDate').value = groupMode ? queryStartDate : '';
+    document.getElementById('endDate').value = groupMode ? queryEndDate : '';
+    document.getElementById('keyword').value = '';
+    document.getElementById('type').value = 'all';
+    resultsElement.textContent = '';
+    sheetLinkElement.textContent = '';
+    statusElement.textContent = '';
+    var row = document.createElement('tr');
+    var cell = document.createElement('td');
+    cell.colSpan = 10;
+    cell.textContent = '請輸入條件後按「搜尋」。';
+    row.appendChild(cell);
+    resultsElement.appendChild(row);
+  }
+
+  document.getElementById('searchButton').addEventListener('click', search);
+  document.getElementById('resetButton').addEventListener('click', reset);
+  if (groupMode) {
+    document.getElementById('modeDescription').textContent = '群組完整紀錄：僅顯示授權範圍內的安全化紀錄。';
+    document.getElementById('startDate').value = queryStartDate;
+    document.getElementById('endDate').value = queryEndDate;
+  }
+</script>
+</body>
+</html>

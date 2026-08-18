@@ -2,9 +2,19 @@ import type { ParsedCommand } from "./types";
 
 const EXACT_COMMANDS: Readonly<Record<string, ParsedCommand["name"]>> = {
   "狀態": "status",
+  "重新授權": "reauthorize",
   "解除綁定": "unbind",
   "綁定群組": "bindGroup",
   "解除群組": "unbindGroup",
+  "紀錄": "records",
+  "查詢紀錄": "records",
+  "備份清單": "groupSummary",
+  "今日備份清單": "groupSummary",
+  "本週備份清單": "groupSummary",
+  "容量": "quota",
+  "空間": "quota",
+  "Drive容量": "quota",
+  "群組容量": "groupQuota",
   "待審核": "pendingApproval",
   "說明": "help",
 };
@@ -17,6 +27,15 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
   if (/^確認核准全部(?:\s|$)/u.test(normalized)) {
     return { name: "confirmApproveAll", argument: normalized.replace(/^確認核准全部\s*/u, "") };
+  }
+  if (/^(?:\d{1,2}月|\d{4}年\d{1,2}月|\d{4}-\d{2})\s*備份清單$/u.test(normalized)) {
+    return { name: "groupSummary", argument: normalized };
+  }
+  if (/^.+備份清單$/u.test(normalized)) {
+    return { name: "groupSummary", argument: normalized };
+  }
+  if (/^群組紀錄(?:\s|$)/u.test(normalized)) {
+    return { name: "groupRecords", argument: normalized.slice(4).trim() };
   }
   if (/^確認拒絕全部(?:\s|$)/u.test(normalized)) {
     return { name: "confirmRejectAll", argument: normalized.replace(/^確認拒絕全部\s*/u, "") };

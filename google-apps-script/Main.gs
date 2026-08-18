@@ -15,6 +15,51 @@ function doGet(request) {
       return template.evaluate().setTitle('綁定連結無效');
     }
   }
+  if (route === 'query') {
+    try {
+      var queryToken = request.parameter.token || '';
+      var queryPayload = verifyRecordQueryToken_(queryToken);
+      var queryTemplate = HtmlService.createTemplateFromFile('RecordSearchPage');
+      queryTemplate.queryToken = queryToken;
+      queryTemplate.groupMode = Boolean(queryPayload.groupIdHash);
+      queryTemplate.queryStartDate = queryPayload.startDate || '';
+      queryTemplate.queryEndDate = queryPayload.endDate || '';
+      return queryTemplate.evaluate()
+        .setTitle('LINE 記錄搜尋中心')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+    } catch (error) {
+      var queryResult = HtmlService.createTemplateFromFile('ResultPage');
+      queryResult.success = false;
+      queryResult.message = isAppError_(error) && error.appCode === 'RECORD_QUERY_TOKEN_EXPIRED'
+        ? '查詢連結已過期，請回 LINE 重新輸入「紀錄」取得新連結。'
+        : '查詢連結無效，請回 LINE 重新輸入「紀錄」取得新連結。';
+      return queryResult.evaluate().setTitle('查詢連結無效');
+    }
+  }
+  if (route === 'q') {
+    try {
+      var shortCode = request.parameter.id || '';
+      var shortPayload = verifyRecordQueryShortCode_(shortCode);
+      var shortTemplate = HtmlService.createTemplateFromFile('RecordSearchPage');
+      shortTemplate.queryToken = shortCode;
+      shortTemplate.groupMode = Boolean(shortPayload.groupIdHash);
+      shortTemplate.queryStartDate = shortPayload.startDate || '';
+      shortTemplate.queryEndDate = shortPayload.endDate || '';
+      shortTemplate.legacyNotice = '';
+      return shortTemplate.evaluate()
+        .setTitle('LINE 記錄搜尋中心')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.DEFAULT);
+    } catch (error) {
+      var shortResult = HtmlService.createTemplateFromFile('ResultPage');
+      shortResult.success = false;
+      shortResult.message = isAppError_(error) && error.appCode === 'RECORD_QUERY_TOKEN_EXPIRED'
+        ? error.queryScope === 'group-record-query'
+          ? '查詢連結已過期，請回 LINE 重新輸入「群組紀錄」取得新連結。'
+          : '查詢連結已過期，請回 LINE 重新輸入「紀錄」取得新連結。'
+        : '查詢連結無效，請回 LINE 重新取得新的查詢連結。';
+      return shortResult.evaluate().setTitle('查詢連結無效');
+    }
+  }
   return jsonOutput_({ status: 'ok' });
 }
 
@@ -109,11 +154,11 @@ function doPost(request) {
 
 function processJob_(job) {
   if (job.eventType === 'follow') {
-    return { replyMessage: getHelpMessage_() };
+    return { replyMessage: getHelpMessage_(job) };
   }
   if (job.eventType === 'unfollow') {
-    if (job.lineUserId) {
-      unlinkGoogleAccount_(hashIdentifier_(job.lineUserId));
+    if (job.lineUserHash) {
+      unlinkGoogleAccount_(job.lineUserHash);
     }
     return {};
   }
@@ -121,8 +166,8 @@ function processJob_(job) {
     return { replyMessage: 'Bot 已加入群組。請由預定的備份擁有者輸入「綁定群組」。' };
   }
   if (job.eventType === 'leave') {
-    if (job.groupId) {
-      disableGroup_(hashIdentifier_(job.groupId), null);
+    if (job.groupIdHash) {
+      disableGroup_(job.groupIdHash, null);
     }
     return {};
   }
@@ -135,36 +180,90 @@ function processJob_(job) {
   return backupMessage_(job);
 }
 
-function getHelpMessage_() {
-  return [
+function getHelpMessage_(job) {
+  if (job && job.groupIdHash) {
+    return [
+      '群組可用指令：',
+      '',
+      '#筆記 <內容>：保存群組文字筆記',
+      '狀態：查詢本群組是否已綁定',
+      '綁定群組：設定群組備份擁有者',
+      '解除群組：解除群組備份綁定，僅限群組 owner 或管理者',
+      '容量：容量資訊屬於個人 Google Drive，請私訊 Bot 輸入「容量」查詢',
+      '備份清單：查詢本月群組備份摘要',
+      '今日備份清單：查詢今天群組備份摘要',
+      '本週備份清單：查詢本週群組備份摘要',
+      '8月備份清單：查詢指定月份群組備份摘要',
+      '',
+      '群組附件備份規則：',
+      '群組已綁定後，成員傳送圖片、影片、音訊、PDF、DOCX、XLSX、TXT、XML 等檔案，會備份到群組備份擁有者的 Google Drive。',
+      '群組附件成功預設不回覆，避免洗版。',
+      '群組 #筆記 成功會回覆「✅ 筆記已備份。」',
+      '',
+      '個人綁定、紀錄查詢、容量查詢與管理者審核指令請私訊 Bot 執行。'
+    ].join('\n');
+  }
+  var lines = [
     '可用指令：',
-    '綁定：自助申請 Google 帳號（需管理者審核）',
+    '',
+    '【個人綁定】',
+    '綁定：自助連結自己的 Google 帳號',
     '綁定 <邀請碼>：使用管理者邀請碼連結 Google 帳號',
-    '狀態：查詢個人與群組綁定',
-    '解除綁定：清除 OAuth Token',
-    '綁定群組／解除群組：設定群組備份擁有者',
-    '#筆記 <內容>：在群組保存文字',
-    '說明：顯示本說明',
-    '管理者指令：待審核、核准／拒絕 <編號[,編號]>、核准／拒絕 全部（需二次確認）'
-  ].join('\n');
+    '重新授權：更新 Google OAuth Token，不重建既有 Drive／Sheet',
+    '狀態：查詢個人綁定狀態',
+    '解除綁定：清除 Google 授權 Token',
+    '',
+    '【個人備份】',
+    '直接傳文字、圖片、影片、音訊或檔案給 Bot，即可備份到自己的 Google Drive。',
+    '支援常見檔案格式，例如 PDF、TXT、XML、DOCX、XLSX。',
+    '單檔大小限制：20 MB 以下。',
+    '',
+    '【紀錄查詢】',
+    '紀錄：取得 10 分鐘有效的 LINE 記錄搜尋中心連結',
+    '查詢紀錄：同「紀錄」',
+    '',
+    '【容量查詢】',
+    '容量：查詢 Google Drive 總容量、已使用容量與 LINE 備份資料夾估算容量',
+    '空間：同「容量」',
+    'Drive容量：同「容量」',
+    '',
+      '【群組使用】',
+      '#筆記 <內容>：在已綁定群組中保存文字筆記',
+      '群組附件會備份到群組備份擁有者的 Google Drive。',
+      '群組紀錄：群組備份擁有者可私訊查詢完整紀錄',
+    '個人綁定請私訊 Bot 執行。',
+    '',
+    '說明：顯示本說明'
+  ];
+  if (job && job.lineUserHash && isAdminLineUserHash_(job.lineUserHash)) {
+    lines.push('', '【管理者指令】（僅管理者可見）');
+    lines.push('待審核：查看待審核使用者');
+    lines.push('核准 <編號[,編號]>：核准一筆或多筆使用者');
+    lines.push('拒絕 <編號[,編號]>：拒絕一筆或多筆使用者');
+    lines.push('核准全部：建立整批核准確認碼');
+    lines.push('拒絕全部：建立整批拒絕確認碼');
+    lines.push('確認核准全部 <確認碼>：執行整批核准');
+    lines.push('確認拒絕全部 <確認碼>：執行整批拒絕');
+  }
+  return lines.join('\n');
 }
 
 function processCommand_(job) {
-  if (!job.lineUserId) {
+  if (!job.lineUserHash) {
     return { replyMessage: 'LINE 未提供傳送者識別，無法執行此指令。' };
   }
-  var lineUserHash = hashIdentifier_(job.lineUserId);
-  if (job.command === 'pendingApproval') {
-    if (job.groupId) {
-      return { replyMessage: '管理者審核指令請在私訊 Bot 中使用。' };
+  var lineUserHash = job.lineUserHash;
+  if (job.groupIdHash) {
+    var groupCommandRestriction = getGroupCommandRestrictionMessage_(job.command);
+    if (groupCommandRestriction) {
+      return { replyMessage: groupCommandRestriction };
     }
+  }
+  if (job.command === 'pendingApproval') {
     assertAdminUser_(lineUserHash);
     return { replyMessage: listPendingApprovalUsers_() };
   }
   if (job.command === 'approve' || job.command === 'reject') {
-    if (job.groupId) {
-      return { replyMessage: '管理者審核指令請在私訊 Bot 中使用。' };
-    }
     assertAdminUser_(lineUserHash);
     var approvalStatus = job.command === 'approve'
       ? USER_APPROVAL_STATUS_.APPROVED
@@ -201,9 +300,6 @@ function processCommand_(job) {
     return { replyMessage: formatApprovalBatchResult_(approvalStatus, batchResult) };
   }
   if (job.command === 'confirmApproveAll' || job.command === 'confirmRejectAll') {
-    if (job.groupId) {
-      return { replyMessage: '管理者審核指令請在私訊 Bot 中使用。' };
-    }
     assertAdminUser_(lineUserHash);
     var confirmationCode = getApprovalConfirmationCommandArgument_(job);
     var confirmationOperation = job.command === 'confirmApproveAll' ? 'APPROVE_ALL' : 'REJECT_ALL';
@@ -215,12 +311,27 @@ function processCommand_(job) {
     return { replyMessage: formatApprovalBatchResult_(allApprovalStatus, allResult) };
   }
   if (job.command === 'help') {
-    return { replyMessage: getHelpMessage_() };
+    return { replyMessage: getHelpMessage_(job) };
+  }
+  if (job.command === 'records') {
+    return { replyMessage: createRecordQueryLink_(lineUserHash) };
+  }
+  if (job.command === 'groupSummary') {
+    return { replyMessage: getGroupBackupSummaryReply_(job) };
+  }
+  if (job.command === 'groupRecords') {
+    return { replyMessage: getGroupRecordQueryReply_(lineUserHash, job) };
+  }
+  if (job.command === 'quota') {
+    return { replyMessage: getPersonalDriveQuotaReply_(lineUserHash) };
+  }
+  if (job.command === 'groupQuota') {
+    return { replyMessage: getOwnedGroupDriveQuotaReply_(lineUserHash) };
+  }
+  if (job.command === 'reauthorize') {
+    return createReauthorizationReply_(job, lineUserHash);
   }
   if (job.command === 'bind') {
-    if (job.groupId) {
-      return { replyMessage: '為避免綁定連結在群組曝光，請私訊 Bot 執行「綁定 <邀請碼>」。' };
-    }
     var inviteCode = String(job.rawText || '').replace(/^綁定\s*/u, '').trim();
     if (!inviteCode) {
       if (!isSelfServiceBindingEnabled_()) {
@@ -229,7 +340,7 @@ function processCommand_(job) {
       var existingUser = findUserByHash_(lineUserHash);
       var existingStatus = getUserApprovalStatus_(existingUser);
       if (existingUser && existingUser.GoogleSubjectId && existingStatus === USER_APPROVAL_STATUS_.APPROVED) {
-        return { replyMessage: '目前已完成 Google 綁定，請輸入「狀態」查詢。' };
+        return { replyMessage: '目前已完成 Google 綁定；若需更新授權，請輸入「重新授權」。' };
       }
       if (existingUser && existingUser.GoogleSubjectId && existingStatus === USER_APPROVAL_STATUS_.PENDING) {
         return { replyMessage: 'Google 授權已完成，目前等待管理者審核。' };
@@ -271,6 +382,11 @@ function processCommand_(job) {
     };
   }
   if (job.command === 'status') {
+    if (job.groupIdHash) {
+      return {
+        replyMessage: getGroupStatusMessage_(findEnabledGroupByHash_(job.groupIdHash))
+      };
+    }
     var user = findUserByHash_(lineUserHash);
     var userStatus = getUserApprovalStatus_(user);
     var userStatusMessage = !user
@@ -283,12 +399,9 @@ function processCommand_(job) {
     var ownedGroups = getSheetRecords_('Groups').filter(function (record) {
       return record.OwnerLineUserHash === lineUserHash && record.Enabled === true;
     });
-    var groupStatus = job.groupId
-      ? (findEnabledGroupByHash_(hashIdentifier_(job.groupId)) ? '此群組已綁定' : '此群組尚未綁定')
-      : '目前是個人聊天室';
     return {
       replyMessage: userStatusMessage +
-        '\n管理中的群組：' + ownedGroups.length + ' 個\n' + groupStatus
+        '\n管理中的群組：' + ownedGroups.length + ' 個'
     };
   }
   if (job.command === 'unbind') {
@@ -305,6 +418,63 @@ function processCommand_(job) {
     return unbindGroup_(job, lineUserHash);
   }
   return { replyMessage: '無法辨識指令，請輸入「說明」。' };
+}
+
+function createReauthorizationReply_(job, lineUserHash) {
+  if (job.groupIdHash) {
+    return { replyMessage: '個人重新授權請私訊 Bot 執行。' };
+  }
+  var existingUser = findUserByHash_(lineUserHash);
+  if (!existingUser || !existingUser.GoogleSubjectId) {
+    return { replyMessage: '目前沒有可重新授權的 Google 綁定，請先輸入「綁定」。' };
+  }
+  if (!job.bindToken) {
+    throw createAppError_('BIND_TOKEN_MISSING', false, '無法建立重新授權連結，請重試。');
+  }
+  var bindPayload = verifyBindToken_(job.bindToken);
+  if (!constantTimeEqual_(bindPayload.lineUserHash, lineUserHash)) {
+    throw createAppError_('BIND_TOKEN_USER_MISMATCH', false, '重新授權資料驗證失敗。');
+  }
+  createBindingSession_(
+    lineUserHash,
+    bindPayload.nonce,
+    bindPayload.expiresAt,
+    null,
+    true
+  );
+  var baseUrl = getRequiredProperty_(APP_CONFIG_KEYS_.APP_BASE_URL);
+  return {
+    replyMessage: '請在 10 分鐘內開啟以下私人重新授權連結：\n' +
+      baseUrl + '?route=bind&token=' + encodeURIComponent(job.bindToken)
+  };
+}
+
+function getGroupCommandRestrictionMessage_(command) {
+  if (command === 'bind') {
+    return '個人綁定請私訊 Bot 執行，避免授權連結曝光。';
+  }
+  if (command === 'reauthorize') {
+    return '個人重新授權請私訊 Bot 執行。';
+  }
+  if (command === 'unbind') {
+    return '個人解除綁定請私訊 Bot 執行。';
+  }
+  if (
+    ['pendingApproval', 'approve', 'reject', 'confirmApproveAll', 'confirmRejectAll']
+      .indexOf(command) >= 0
+  ) {
+    return '管理指令請私訊 Bot 執行。';
+  }
+  if (command === 'records') {
+    return '紀錄查詢請私訊 Bot 執行。';
+  }
+  if (command === 'groupRecords') {
+    return '群組完整紀錄請私訊 Bot 執行。';
+  }
+  if (command === 'quota' || command === 'groupQuota') {
+    return '容量資訊屬於個人 Google Drive，請私訊 Bot 輸入「容量」查詢。';
+  }
+  return null;
 }
 
 function getApprovalCommandArgument_(job) {
@@ -328,7 +498,7 @@ function formatApprovalBatchResult_(approvalStatus, result) {
 }
 
 function bindGroup_(job, ownerLineUserHash) {
-  if (!job.groupId) {
+  if (!job.groupIdHash) {
     return { replyMessage: '「綁定群組」只能在一般 LINE 群組內使用。' };
   }
   var ownerRecord = findUserByHash_(ownerLineUserHash);
@@ -340,13 +510,15 @@ function bindGroup_(job, ownerLineUserHash) {
         : '請先私訊 Bot 完成 Google 綁定，再回群組輸入「綁定群組」。'
     };
   }
-  var groupIdHash = hashIdentifier_(job.groupId);
+  var groupIdHash = job.groupIdHash;
   var existing = findEnabledGroupByHash_(groupIdHash);
   if (existing && existing.OwnerLineUserHash !== ownerLineUserHash) {
     return { replyMessage: '此群組已有其他備份擁有者，請先由原擁有者解除群組。' };
   }
   var accessToken = getUserAccessToken_(ownerLineUserHash);
-  var groupName = getLineGroupName_(job.groupId);
+  var groupName = existing && existing.GroupName
+    ? existing.GroupName
+    : sanitizeDisplayNameForSheet_(job.groupDisplayName || '未命名群組', '未命名群組');
   var folderId = createGroupBackupFolder_(accessToken, owner.GroupFolderId, groupName, groupIdHash);
   upsertGroup_({
     groupIdHash: groupIdHash,
@@ -359,33 +531,50 @@ function bindGroup_(job, ownerLineUserHash) {
 }
 
 function unbindGroup_(job, ownerLineUserHash) {
-  if (!job.groupId) {
+  if (!job.groupIdHash) {
     return { replyMessage: '「解除群組」只能在一般 LINE 群組內使用。' };
   }
-  return {
-    replyMessage: disableGroup_(hashIdentifier_(job.groupId), ownerLineUserHash)
-      ? '已解除群組備份；既有 Drive 檔案不會刪除。'
-      : '只有目前的群組備份擁有者可以解除，或此群組尚未綁定。'
-  };
+  var groupIdHash = job.groupIdHash;
+  var group = findEnabledGroupByHash_(groupIdHash);
+  if (!group) {
+    return { replyMessage: '此群組尚未綁定。' };
+  }
+  if (!isGroupManager_(group, ownerLineUserHash)) {
+    return { replyMessage: '只有群組備份擁有者可以操作此指令。' };
+  }
+  disableGroup_(groupIdHash, null);
+  return { replyMessage: '已解除群組備份；既有 Drive 檔案不會刪除。' };
+}
+
+function isGroupManager_(group, actorLineUserHash) {
+  return Boolean(
+    group &&
+    typeof actorLineUserHash === 'string' &&
+    (group.OwnerLineUserHash === actorLineUserHash || isAdminLineUserHash_(actorLineUserHash))
+  );
+}
+
+function canGroupMemberSubmitBackup_(group, ownerUser) {
+  return Boolean(group && isApprovedEnabledUser_(ownerUser));
+}
+
+function getGroupStatusMessage_(group) {
+  return group ? '此群組已綁定' : '此群組尚未綁定';
 }
 
 function resolveBackupContext_(job) {
-  if (!job.lineUserId) {
+  if (!job.lineUserHash) {
     throw createAppError_('LINE_USER_ID_MISSING', false, 'LINE 未提供傳送者識別，無法備份。');
   }
-  var senderHash = hashIdentifier_(job.lineUserId);
-  if (job.groupId) {
-    var senderRecord = findUserByHash_(senderHash);
-    if (senderRecord && !isApprovedEnabledUser_(senderRecord)) {
-      throw createAppError_('USER_NOT_APPROVED', false, '你的帳號尚未審核通過，請等待管理者核准。');
-    }
-    var group = findEnabledGroupByHash_(hashIdentifier_(job.groupId));
+  var senderHash = job.lineUserHash;
+  if (job.groupIdHash) {
+    var group = findEnabledGroupByHash_(job.groupIdHash);
     if (!group) {
       throw createAppError_('GROUP_NOT_BOUND', false, '此群組尚未指定備份擁有者。');
     }
     var ownerRecord = findUserByHash_(group.OwnerLineUserHash);
     var owner = findEnabledUserByHash_(group.OwnerLineUserHash);
-    if (!owner) {
+    if (!canGroupMemberSubmitBackup_(group, owner)) {
       throw createAppError_(
         ownerRecord && getUserApprovalStatus_(ownerRecord) === USER_APPROVAL_STATUS_.PENDING
           ? 'GROUP_OWNER_NOT_APPROVED'
@@ -402,6 +591,7 @@ function resolveBackupContext_(job) {
       baseFolderId: group.FolderId,
       sheetId: owner.SheetId,
       groupName: group.GroupName,
+      groupHash: job.groupIdHash,
       sourceType: '群組'
     };
   }
@@ -418,6 +608,7 @@ function resolveBackupContext_(job) {
     baseFolderId: user.PersonalFolderId,
     sheetId: user.SheetId,
     groupName: '',
+    groupHash: '',
     sourceType: '個人'
   };
 }
@@ -427,7 +618,7 @@ function getBackupSuccessReplyMessage_(job) {
     return '✅ 筆記已備份。';
   }
   // 群組附件預設不回覆，避免在群組中洗版。
-  if (job.groupId) {
+  if (job.groupIdHash) {
     return null;
   }
   var messages = {
@@ -465,7 +656,12 @@ function backupMessage_(job) {
     messageTimestamp: job.timestamp,
     sourceType: context.sourceType,
     groupName: context.groupName,
+    groupHash: context.groupHash,
     senderHash: context.senderHash,
+    senderDisplayName: sanitizeDisplayNameForSheet_(
+      job.senderDisplayName || (context.senderHash ? 'user_' + context.senderHash.slice(0, 8) : 'unknown_user'),
+      'unknown_user'
+    ),
     messageType: job.messageType,
     originalFileName: job.fileName || '',
     rawText: job.rawText || '',

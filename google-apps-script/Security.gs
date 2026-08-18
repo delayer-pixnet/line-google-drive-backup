@@ -185,10 +185,19 @@ function validateQueueJob_(job) {
   if (job.messageType !== null && messageTypes.indexOf(job.messageType) < 0) {
     throw createAppError_('JOB_MESSAGE_INVALID', false, '訊息類型不正確。');
   }
-  ['messageId', 'lineUserId', 'groupId', 'replyToken', 'fileName', 'rawText', 'bindToken'].forEach(function (name) {
+  if (Object.prototype.hasOwnProperty.call(job, 'lineUserId') ||
+      Object.prototype.hasOwnProperty.call(job, 'groupId')) {
+    throw createAppError_('JOB_RAW_IDENTIFIER_FORBIDDEN', false, '事件識別資料不正確。');
+  }
+  ['messageId', 'lineUserHash', 'groupIdHash', 'senderDisplayName', 'groupDisplayName', 'replyToken', 'fileName', 'rawText', 'bindToken'].forEach(function (name) {
     var value = job[name];
     if (value !== null && (typeof value !== 'string' || value.length > 5000)) {
       throw createAppError_('JOB_FIELD_INVALID', false, '事件欄位不正確。');
+    }
+  });
+  ['lineUserHash', 'groupIdHash'].forEach(function (name) {
+    if (job[name] !== null && !/^[a-f0-9]{64}$/.test(job[name])) {
+      throw createAppError_('JOB_IDENTIFIER_INVALID', false, '事件識別資料不正確。');
     }
   });
   return job;

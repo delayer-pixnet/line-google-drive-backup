@@ -23,6 +23,7 @@ function cleanupExpiredAdminRecords() {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    var expiredRecordQueryTokens = cleanupExpiredRecordQueryTokens_();
     var counts = {
       nonces: deleteAdminRowsWhere_('Nonces', function (record) {
         var expiresAt = parseStoredDateMilliseconds_(record.ExpiresAt);
@@ -44,7 +45,8 @@ function cleanupExpiredAdminRecords() {
         return record.Status === 'COMPLETED' &&
           Number.isFinite(updatedAt) &&
           updatedAt < completedJobCutoff;
-      })
+      }),
+      recordQueryTokens: expiredRecordQueryTokens
     };
     console.log(JSON.stringify({ component: 'admin-cleanup', deletedCounts: counts }));
     return counts;
