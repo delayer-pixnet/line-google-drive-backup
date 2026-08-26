@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="@538 LINE 備份 Bot 隱私權政策。">
+  <title>隱私權政策｜@538 LINE 備份 Bot</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans TC", sans-serif; }
+    body { margin: 0; color: #202124; background: #f8f9fa; line-height: 1.8; }
+    main { max-width: 760px; margin: 0 auto; padding: 56px 24px 40px; }
+    article { background: #fff; border: 1px solid #dadce0; border-radius: 12px; padding: 32px; box-shadow: 0 2px 8px rgb(60 64 67 / 12%); }
+    h1 { margin-top: 0; color: #174ea6; line-height: 1.3; }
+    h2 { margin-top: 32px; color: #185abc; font-size: 1.2rem; }
+    a { color: #0b57d0; }
+    footer { margin-top: 24px; color: #5f6368; font-size: .9rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>隱私權政策</h1>
+      <p>適用服務：<strong>@538 LINE 備份 Bot</strong></p>
+      <p>本政策說明本服務如何處理備份及查詢所需資料。使用本服務即表示你已閱讀並理解本政策。</p>
+
+      <h2>會處理的資料</h2>
+      <p>依你使用的功能，本服務可能處理：</p>
+      <ul>
+        <li>LINE 顯示名稱與不可逆的安全識別雜湊。</li>
+        <li>群組名稱、訊息時間、原始檔名、文字內容、網址與標籤。</li>
+        <li>由本服務建立的 Drive 檔案連結與備份紀錄。</li>
+      </ul>
+      <p>本服務不會把 raw LINE userId 或 raw groupId 寫入使用者備份紀錄或一般應用程式 Log；系統管理資料僅使用安全雜湊或安全化代號。</p>
+
+      <h2>使用目的</h2>
+      <p>資料只用於提供 LINE 訊息備份、備份紀錄查詢、容量查詢及群組備份管理，不販售資料，也不提供與上述目的無關的廣告或資料分析。</p>
+
+      <h2>資料儲存位置</h2>
+      <p>備份檔案與個人備份紀錄儲存在你授權的 Google Drive 與備份 Google Sheet。群組備份檔案儲存在群組備份擁有者授權的 Google Drive。為維持服務運作，必要的索引與作業狀態可能儲存在系統管理 Google Sheet；其中不保存 raw LINE userId、raw groupId、Access Token、Refresh Token 或 Secret。</p>
+
+      <h2>Google OAuth</h2>
+      <p>OAuth Token 僅用於你授權的 Google Drive 備份功能。本服務使用 <code>drive.file</code> 權限，不要求完整 Google Drive 權限。你可以在 LINE 私訊輸入「解除綁定」清除本服務保存的 OAuth Token，或輸入「重新授權」重新取得授權；重新授權不會刪除既有 Users、備份資料夾、備份紀錄或群組資料。</p>
+
+      <h2>資料刪除方式</h2>
+      <ol>
+        <li>在 LINE 私訊 Bot 輸入「解除綁定」，清除本服務保存的 OAuth Token 並停止該帳號的備份。</li>
+        <li>若要刪除備份檔案或備份 Sheet，請在你自己的 Google Drive 中自行刪除；群組備份由擁有者管理。</li>
+        <li>若要要求刪除必要的系統索引，請聯絡本服務管理者並提供可安全識別你的代號；請勿透過訊息提供 Token 或 Secret。</li>
+      </ol>
+
+      <h2>政策更新</h2>
+      <p>服務功能或法令變更時，本頁可能更新。更新後繼續使用本服務，即表示接受更新內容。</p>
+      <p><a href="index.html">返回首頁</a> ｜ <a href="terms.html">服務條款</a></p>
+    </article>
+    <footer>@538 LINE 備份 Bot</footer>
+  </main>
+</body>
+</html>
