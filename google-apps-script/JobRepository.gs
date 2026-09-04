@@ -10,6 +10,84 @@ function findJobByMessageId_(messageId) {
   }) || null;
 }
 
+var JOB_OAUTH_REAUTH_REQUIRED_STATUS_ = 'OAUTH_REAUTH_REQUIRED';
+var JOB_RETRY_PENDING_REAUTH_STATUS_ = 'RETRY_REQUESTED_PENDING_REAUTH';
+var JOB_METADATA_COLUMN_ = 11;
+var JOB_METADATA_COLUMN_COUNT_ = 9;
+
+function normalizeJobMetadataText_(value, maximumLength) {
+  return String(value || '')
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[\r\n]+/g, ' ')
+    .trim()
+    .slice(0, maximumLength);
+}
+
+function getJobMetadataValues_(job, context) {
+  var sourceType = job && job.groupIdHash ? 'group' : 'private';
+  var lineMessageTime = job && Number.isSafeInteger(job.timestamp) && job.timestamp >= 0
+    ? new Date(job.timestamp)
+    : '';
+  return [[
+    normalizeJobMetadataText_(job && job.messageType, 20),
+    typeof (job && job.lineUserHash) === 'string' && /^[a-f0-9]{64}$/.test(job.lineUserHash)
+      ? job.lineUserHash
+      : '',
+    typeof (job && job.groupIdHash) === 'string' && /^[a-f0-9]{64}$/.test(job.groupIdHash)
+      ? job.groupIdHash
+      : '',
+    context && typeof context.ownerHash === 'string' && /^[a-f0-9]{64}$/.test(context.ownerHash)
+      ? context.ownerHash
+      : '',
+    sourceType,
+    normalizeJobMetadataText_(job && job.fileName, 255),
+    lineMessageTime,
+    normalizeJobMetadataText_(job && job.senderDisplayName, 200),
+    normalizeJobMetadataText_(job && job.groupDisplayName, 200)
+  ]];
+}
+
+function updateJobMetadata_(webhookEventId, job, context) {
+  var existing = findJobByWebhookId_(webhookEventId);
+  if (!existing) {
+    return false;
+  }
+  getAdminSheet_('Jobs').getRange(existing._row, JOB_METADATA_COLUMN_, 1, JOB_METADATA_COLUMN_COUNT_)
+    .setValues(getJobMetadataValues_(job, context));
+  return true;
+}
+
+function markJobOAuthReauthRequired_(job, context, errorCode, safeMessage) {
+  var existing = findJobByWebhookId_(job.webhookEventId);
+  if (!existing) {
+    throw createAppError_('JOB_NOT_FOUND', true, '找不到工作紀錄。');
+  }
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var current = findJobByWebhookId_(job.webhookEventId);
+    if (!current) {
+      throw createAppError_('JOB_NOT_FOUND', true, '找不到工作紀錄。');
+    }
+    var sheet = getAdminSheet_('Jobs');
+    sheet.getRange(current._row, 3, 1, 8).setValues([[
+      JOB_OAUTH_REAUTH_REQUIRED_STATUS_,
+      Number(current.RetryCount) || 0,
+      '',
+      current.DriveFileId || '',
+      String(errorCode || 'OAUTH_REAUTH_REQUIRED').slice(0, 60),
+      String(safeMessage || 'Google 授權已失效。').slice(0, 500),
+      current.CreatedAt || getTaipeiNow_(),
+      getTaipeiNow_()
+    ]]);
+    sheet.getRange(current._row, JOB_METADATA_COLUMN_, 1, JOB_METADATA_COLUMN_COUNT_)
+      .setValues(getJobMetadataValues_(job, context));
+  } finally {
+    lock.releaseLock();
+  }
+  return true;
+}
+
 function getNewJobLeaseExpiration_() {
   return new Date(Date.now() + getJobProcessingLeaseSeconds_() * 1000);
 }
@@ -68,18 +146,21 @@ function claimJob_(job) {
           getJobRetryAfterSeconds_(existing.LeaseExpiresAt, nowMilliseconds)
         );
       }
-      if (existingStatus !== 'FAILED' && existingStatus !== 'PROCESSING') {
+      if (existingStatus !== 'FAILED' && existingStatus !== 'PROCESSING' && existingStatus !== 'RETRY_REQUESTED') {
         return createJobClaimResult_(false, existingStatus, existing.LeaseExpiresAt, null);
       }
     }
     var now = getTaipeiNow_();
     var leaseExpiresAt = getNewJobLeaseExpiration_();
+    var metadataValues = getJobMetadataValues_(job, null)[0];
     if (existing) {
       var retryCount = Number(existing.RetryCount) || 0;
       var sheet = getAdminSheet_('Jobs');
       sheet.getRange(existing._row, 3, 1, 8).setValues([[
         'PROCESSING', retryCount + 1, leaseExpiresAt, existing.DriveFileId || '', '', '', existing.CreatedAt, now
       ]]);
+      sheet.getRange(existing._row, JOB_METADATA_COLUMN_, 1, JOB_METADATA_COLUMN_COUNT_)
+        .setValues([metadataValues]);
     } else {
       appendAdminRow_('Jobs', [
         job.webhookEventId,
@@ -92,7 +173,7 @@ function claimJob_(job) {
         '',
         now,
         now
-      ]);
+      ].concat(metadataValues));
     }
     return createJobClaimResult_(true, 'PROCESSING', leaseExpiresAt, null);
   } finally {

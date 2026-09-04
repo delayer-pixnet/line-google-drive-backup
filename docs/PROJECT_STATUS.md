@@ -1,8 +1,8 @@
 # 專案狀態
 
-最後更新：2026-08-17
+最後更新：2026-09-04
 
-目前已加入可選的「自助綁定 + 管理者審核」流程、紀錄查詢中心、傳送者名稱欄位、容量查詢與完整角色化說明。本輪程式修改已同步 GAS、更新既有 Web App 並重新部署 Worker；不建立 Commit 或 Push Git。
+目前已加入可選的「自助綁定 + 管理者審核」流程、紀錄查詢中心、傳送者名稱欄位、容量查詢、群組備份清單與補備份流程。本輪新增 OAuth Token 可用性／刷新手動測試，已同步 GAS 並更新既有 Web App 至 `@34`；不建立 Commit 或 Push Git。
 
 ## 已完成
 
@@ -27,22 +27,36 @@
 - 查詢中心結果新增「傳送者名稱」，關鍵字可搜尋傳送者名稱、群組名稱、原始檔名、文字內容、網址與標籤；不輸出 raw LINE userId、groupId、Email、Token 或 Secret。
 - 新增私訊 `容量`、`空間`、`Drive容量` 與 `群組容量`。GAS 以使用者自己的 `drive.file` OAuth Token 呼叫 Drive quota API，遞迴估算備份 root／個人／群組資料夾與 Sheet 的檔案大小；結果以 `lineUserHash` 快取 600 秒。群組內只提示改用私訊，不公開 owner 容量。
 - `說明` 已依私訊一般使用者、管理者與群組情境分流；一般說明涵蓋綁定、個人備份、紀錄、容量、群組規則及 20 MB 限制，管理者指令僅管理者可見，群組不顯示 OAuth／查詢連結或審核操作。
+- 群組摘要（`備份清單`、`今日備份清單`、`本週備份清單` 與月份格式）現在是群組層級唯讀功能；所有群組成員均可查詢，不要求發話者個人綁定、核准或 owner 身分。摘要查詢失敗時會回覆安全提示，不再因 Queue retryable 分支而靜默無回應；安全記錄只包含摘要指令、雜湊前綴、權限布林值與 correlationId。
+- 群組摘要最新紀錄會顯示 Asia/Taipei 的 `MM/dd HH:mm`、傳送者名稱，以及無原始檔名圖片的穩定 `image_yyyyMMdd_HHmmss_<hash-prefix>.jpg` 顯示名稱；群組摘要仍不公開 Drive URL、查詢中心 URL 或完整 File ID。
 - 新增 `testOwnerAuthorizationHealth` 部署後授權健康檢查：只讀取必要設定、管理 Sheet、受控外部請求與執行環境資訊，不寫入備份、不呼叫 LINE、不建立 OAuth／Drive 資源；授權完成時記錄 `PASS testOwnerAuthorizationHealth`。
 - 容量查詢與狀態／個人備份共用使用者綁定狀態。`Enabled=true` 且舊資料 `ApprovalStatus` 空白會相容視為 `APPROVED`；缺少 OAuth Token、授權不足與暫時錯誤分別回覆安全訊息並以 `drive-quota` 欄位記錄診斷。提供管理者手動 `migrateEnabledUsersToApproved`，只補齊既有啟用使用者。
 - OAuth Service 名稱集中為 `LineUser_<lineUserHash>`，容量、紀錄、個人備份與 Drive 初始化共用 `getUserAccessToken_()`；新增 `oauth-token` 安全診斷與私訊 `重新授權`。重新授權只更新同一 Google 帳號的 OAuth Token，重用既有 Users、Drive、Sheet 與群組資料；不同 Google 帳號會遭拒絕。
+- 新增 `testOAuthProductionReadinessChecklist`，只檢查 OAuth Client 設定是否存在、使用者 scope 是否包含 `drive.file`、是否保留 `重新授權`，並以 Logger 提醒管理者確認 Google Auth Platform 的 Publishing status。Testing 模式可能造成 Drive scope 的 Refresh Token 週期性失效；Production 發布後，既有失效帳號仍需重新授權一次。
+- 新增管理者手動 `testOAuthRefreshForConfiguredUser` 與 `testOAuthForceRefreshForConfiguredUser`：從 `TEST_LINE_USER_HASH` 取得 64 碼雜湊，沿用正式 `LineUser_<lineUserHash>` OAuth Service 與容量 `about.get` helper，安全驗證 Token metadata、`hasAccess()`、一般自動刷新及主動 `refresh()`；不輸出 Token、不 reset、不刪除或重建 Users／Drive／Sheet／Groups。
+- 私訊新增 Worker 層級 `系統狀態`／`系統診斷`；Queue consumer 直接回覆 Worker、Queue 與最近 GAS 呼叫摘要，不依賴 GAS。GAS 403 HTML 或無 JSON 的典型錯誤會以 Reply API 提醒管理者執行 `testOwnerAuthorizationHealth`，不會改用 Push 或重做備份。
+- 私訊 `狀態` 會以共用 `LineUser_<lineUserHash>` OAuth Service 顯示 `hasAccess()`、Access Token 剩餘時間（可取得時）、Refresh Token 是否存在、檢查時間與最多 10 個管理中群組名稱；群組內 `狀態` 維持只顯示綁定狀態。
+- 已將 Token 失效與未綁定訊息分離：已有 Users 但 OAuth Token 不可用時提示「重新授權」，沒有 Users 記錄時提示「綁定」；重新授權不刪除或重建既有資料。
+- 新增群組 owner／管理者限定的 `補備份` 與私訊 `群組補備份`。GAS 從 owner 備份 Sheet、Jobs 與既有安全 metadata 篩選已收到 webhook 的失敗／未完成項目，建立 `ReplayRequests` 稽核列並以 `RETRY_REQUESTED` 狀態送入 Worker `/internal/replay`；沿用原有租約、Drive appProperties 與去重保護。
+- 補強 OAuth Token 失效處理：`hasAccess()`、Token 讀取失敗及 Drive／Sheets 401／403 `insufficientPermissions` 會把已 claim 工作標為 `OAUTH_REAUTH_REQUIRED`，保留安全 Jobs metadata 並立即以 Reply API 提醒重新授權；群組提醒以 hash 快取 30 分鐘冷卻。
+- 私訊 `補備份 今日` 可在重新授權後重送個人附件；群組仍使用 `群組補備份`。沒有成功保存原文的私人文字／`#筆記` 不會將完整內容寫入管理 Jobs，會安全略過。
+- OAuth Token 失效時，已啟用使用者的附件與群組 owner 附件／`#筆記` 不再靜默丟棄；Jobs 會保留事件、訊息、類型、檔名、時間與安全雜湊 metadata，狀態為 `OAUTH_REAUTH_REQUIRED`，並以 Reply API 提示重新授權與補備份方式。群組相同 owner 授權錯誤以 `groupIdHash + errorCode` 快取 30 分鐘，避免洗版。
+- `getUserAccessToken_()`、容量、紀錄、個人備份與 Drive 初始化共用 `LineUser_<lineUserHash>` OAuth Service；Token 讀取／刷新失敗會帶安全 correlationId，Drive／Sheets 401／403 `insufficientPermissions` 也會進入待重新授權流程。
+- 私訊 `補備份 今日` 會處理 `OAUTH_REAUTH_REQUIRED`、`RETRY_REQUESTED_PENDING_REAUTH`、`FAILED`、`PENDING`、`PROCESSING_TIMEOUT` 與 `RETRYABLE` 的附件；已完成、缺少 messageId、LINE Content 已不可下載或未保存原文的項目會安全略過，不會抓取 LINE 歷史紀錄。
 
 ## 本機驗證
 
 - `npm run typecheck`：成功，TypeScript strict 無錯誤。
 - `npm run lint`：成功，ESLint 無錯誤。
-- `npm test`：成功，7 個 test files、108 個 tests 全部通過；新增群組摘要／群組紀錄指令解析與安全 Token 測試。Coverage statements 89.13%、branches 84.82%、functions 94.02%、lines 89.18%。
-- Coverage：statements 88.97%、branches 84.59%、functions 94.02%、lines 89.02%。`gas-client.ts`、`line-client.ts`、Queue retry／ack、Profile fallback、指令解析與 Bind Token 對應均有測試。
-- `npm run build`：成功，Wrangler dry-run bundle 32.25 KiB、gzip 8.19 KiB；本輪正式部署版本為 `c1440c5e-17f4-449e-b61b-2b904be71a2c`。
+- `npm test`：成功，8 個 test files、119 個 tests 全部通過；新增群組摘要指令在所有成員情境均排入可回覆工作，以及補強群組摘要日期、權限與圖片顯示名稱測試。Coverage statements 85.11%、branches 83.01%、functions 94.36%、lines 85.07%。
+- Coverage：statements 85.11%、branches 83.01%、functions 94.36%、lines 85.07%。`gas-client.ts`、`line-client.ts`、Queue retry／ack、Profile fallback、指令解析、Bind Token 與補備份端點均有測試。
+- `npm run build`：成功，Wrangler dry-run bundle 38.75 KiB、gzip 9.19 KiB；本輪正式部署版本為 `387007d5-d5bb-4d7c-aa67-22f24615cb51`。
 - `npm audit --audit-level=high`：發現 1 個 `nanoid` high advisory（由 Vitest／Vite 開發相依套件帶入）；不在 Worker runtime bundle，已記錄於 `docs/KNOWN_ISSUES.md`，本輪不做 breaking 或無關依賴升級。
-- GAS 語法：20 個 `.gs` 以 Node.js `vm.Script` UTF-8 parser 全部通過；另有 3 個 HTML 與 `appsscript.json`，已以 clasp 推送 24 個檔案。
+- GAS 語法：22 個 `.gs` 以 Node.js `vm.Script` UTF-8 parser 全部通過；另有 3 個 HTML 與 `appsscript.json`，已以 clasp 推送 26 個檔案並更新既有 Web App 至 `@31`。
 - JSON／JSONC：`appsscript.json`、`script-properties.example.json`、`package.json`、`package-lock.json`、`.clasp.json.example` 解析成功；`wrangler.jsonc.example` 的格式、`GAS_REQUEST_TIMEOUT_MS=55000`、`max_retries >= 5` 與 DLQ 設定均驗證成功。
 - Secret 掃描：10 類高風險憑證格式為 0 命中；Repository 內沒有正式 `.env`、`.dev.vars`、`wrangler.jsonc`、`.clasp.json` 或 `.clasprc.json`。
 - 文件：19 份 Markdown 的相對連結檢查通過；已補充一次性 HMAC 診斷開關與關閉流程。
+- Worker 部署：`/health` 回 HTTP 200 與 `{"status":"ok"}`；Queue producer／consumer 維持 `line-google-drive-backup` 與 DLQ 設定。GAS `WORKER_REPLAY_ENDPOINT` 尚需由管理者依實際 Worker URL 填入，未由本輪自動設定。
 - Git：本輪不建立 Commit、不 Push；保留既有 `main` 分支與工作區中使用者原有的 untracked 檔案。
 
 Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No bindings found`；正式人工測試部署時才會複製 `wrangler.jsonc.example` 為被忽略的 `wrangler.jsonc`，由 Wrangler 載入 Queue bindings。Vitest 與 Wrangler 在 Windows 沙箱內因暫存檔／診斷 Log 權限遇到 `EPERM`，改在獲准的沙箱外執行後均通過。
@@ -57,7 +71,7 @@ Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No
 
 ## 部署判斷
 
-自助綁定、群組權限、角色化說明、紀錄查詢中心、傳送者名稱欄位、容量查詢、重新授權與群組備份清單已完成本輪驗證。GAS 已同步 24 個檔案，既有 Web App 已更新至 `@24`；Worker 已部署版本 `30744b55-9a82-4c97-9f6d-b0691b8259d6`，`/health` HTTP 200 且回應為 `{"status":"ok"}`。`HMAC_DIAGNOSTIC_ENABLED` 維持 `false`；`ENABLE_SELF_SERVICE_BINDING`、`REQUIRE_ADMIN_APPROVAL` 與 `ADMIN_LINE_USER_HASHES` 仍須由管理者依文件自行設定，未在本輪寫入真實識別或 Secret。尚未在本輪替使用者建立邀請碼，也不會修改既有 Secret。
+自助綁定、群組權限、角色化說明、紀錄查詢中心、傳送者名稱欄位、容量查詢、重新授權、群組備份清單與補備份程式已完成本機驗證。GAS 已同步 26 個檔案，既有 Web App 已更新至 `@34`；Worker 已部署版本 `387007d5-d5bb-4d7c-aa67-22f24615cb51`，`/health` 回 HTTP 200。`HMAC_DIAGNOSTIC_ENABLED` 維持 `false`；`WORKER_REPLAY_ENDPOINT` 尚須由管理者依文件設定，未在本輪寫入任何 Script Property、Secret 或邀請碼。
 
 ## 群組備份清單功能（本輪）
 
@@ -70,3 +84,10 @@ Wrangler dry-run 以明確 `src/index.ts` 入口驗證 bundle，因此顯示 `No
 - `群組紀錄` 與個人 `紀錄`／`查詢紀錄` 改由 GAS 產生 10 碼隨機 shortCode，LINE 回覆只含 `/exec?route=q&id={shortCode}`；短碼雜湊、期限、scope 與查詢條件留在 GAS Script Properties，完整長 Token 不再由 Bot 產生。
 - 群組完整查詢仍優先比對「群組識別」。舊列若識別空白，僅在 owner／管理者、owner Sheet、來源類型為 group、群組名稱唯一一致時 fallback；不確定或同名資料會拒絕。
 - 新增管理者手動函式 `migrateLegacyGroupRecordHashes()`，只補唯一可判斷的舊列，不刪除或重建資料。
+
+## 群組補備份（本輪）
+
+- 新增群組 `補備份 今日`、日期／月份／區間格式，以及 owner／管理者私訊 `群組補備份` 與安全群組代號選擇。
+- 補備份只從 owner 備份 Sheet、Jobs 與既有安全 metadata 找出 Bot 曾收到且尚未完成的工作；不抓 LINE 歷史訊息、不在群組公開 Drive URL。
+- 新增 GAS `ReplayService.gs`、管理 Sheet `ReplayRequests` 與 Worker `POST /internal/replay` HMAC 端點；候選工作以 `RETRY_REQUESTED` 分批送入主 Queue，沿用原有租約、Drive appProperties 與去重流程。
+- 本輪 Worker／GAS 變更已完成本機測試、GAS 同步、Web App `@28` 更新與 Worker 部署；管理者仍須在 Apps Script 執行 `testOwnerAuthorizationHealth`，並依文件填入 `WORKER_REPLAY_ENDPOINT` 後，才能進行實際補備份端對端測試。

@@ -22,6 +22,18 @@
 17. 群組備份摘要與完整查詢依賴新版 Sheet 的「群組識別」欄位。舊 Sheet 會在下一次初始化／寫入時於最右側補欄，舊列不回填；摘要只在唯一群組名稱可安全比對時 fallback，完整查詢若缺欄會提示只能查詢新版本紀錄。
 18. 群組摘要讀取 owner 的 Google Sheet，仍受 `drive.file`、Apps Script 執行時間與 Sheets API 配額限制；摘要只列最新 5 筆，完整查詢才顯示 Drive 連結。
 19. 群組完整查詢目前使用 GAS `/exec?route=q&id={shortCode}` 短連結，shortCode 只保存 HMAC 雜湊並在 10 分鐘後失效；舊版長 Token 仍可相容驗證，但 Bot 不再產生長連結。舊列缺少群組識別時，名稱 fallback 僅在 owner／管理者、owner Sheet 與唯一名稱條件成立時啟用；同名或不確定資料會拒絕查詢。`migrateLegacyGroupRecordHashes()` 需由管理者手動執行，且只補唯一可判斷列。
+20. Google OAuth App 若仍為 Testing，使用 `drive.file` 等非基本身分 scope 時，Refresh Token 可能週期性失效；這是 Google OAuth App 發布狀態限制，不是本專案可由程式自動修正的問題。管理者需依 `docs/GOOGLE_CLOUD_SETUP.md` 手動發布到 Production；已失效使用者仍需執行一次 `重新授權`。本專案不會自動操作 Google Cloud Console 或修改 Client ID／Secret。
+21. `補備份` 只會重試 owner 備份 Sheet 與 Jobs 中仍有 messageId 的失敗／未完成項目；LINE Content API 已不可下載、缺少必要 metadata、已完成或明確拒絕的項目會略過。此功能不是 LINE 歷史訊息抓取，無法補 Bot 收到前或系統未收到的內容。
+22. 補備份需在 GAS Script Properties 設定 `WORKER_REPLAY_ENDPOINT`（部署 Worker URL 加上 `/internal/replay`）；未設定或兩端共享金鑰不一致時，只會建立候選紀錄但無法送入 Queue，管理者應查看安全錯誤碼 `REPLAY_*`。
+23. `/internal/replay` 目前以既有 Worker→GAS shared HMAC 及 Jobs／Drive 冪等保護重放；Queue 至少一次傳遞仍可能在短時間內出現重試訊息，最終由 Jobs 終態與 Drive appProperties 去重，不保證跨服務交易原子性。
+
+24. 使用者或群組 owner 的 OAuth Token 失效時，工作會保留為 `OAUTH_REAUTH_REQUIRED` 並回覆重新授權提示；群組相同錯誤 30 分鐘內只提醒一次。重新授權後需手動執行 `補備份 今日` 或 `群組補備份`，不會自動抓取 LINE 歷史紀錄。
+25. 管理 Jobs 不保存尚未寫入使用者 Sheet 的完整文字內容；因此授權失效期間的純文字／`#筆記` 若沒有既有 Sheet 列，補備份會安全略過。附件仍可在 messageId 與 LINE Content API 有效時重試。
+26. Jobs metadata 欄位會由 `ensureAdminSheets_()` 在既有 10 欄 Jobs 表最右側補上；若管理者自行修改前 10 欄標題，系統會停止初始化並要求先恢復標題，不會覆蓋既有資料。
+27. OAuth Token 刷新手動測試需要管理者在 Script Properties 暫設 `TEST_LINE_USER_HASH`（64 碼小寫雜湊），並且必須先完成 `testOwnerAuthorizationHealth`。測試只驗證既有 OAuth Service、Token metadata、`hasAccess()`、`getAccessToken()`、`refresh()` 與 Drive `about.get`；不會顯示或由本專案直接寫入／reset Token。OAuth2 Library 依正常流程可能持久化刷新後的授權 Token；Production 狀態、Google Workspace 政策、撤銷授權與 Refresh Token 配額仍須以實際帳號人工驗證。
+
+28. Worker 的最近 GAS 健康狀態只保存在 isolate 記憶體；Worker 重啟、擴容或切換 isolate 後會顯示「未知」，不代表 GAS 當下不可用。`系統診斷` 僅顯示白名單錯誤碼，Worker 尚未同步 GAS 的管理者 hash 清單，因此不在 Worker 端判斷管理者身分。
+29. GAS 403 HTML fallback 只能在 Queue consumer 尚有有效 Reply Token 時提示；Reply Token 失效時只記錄安全錯誤。若 GAS 已開始執行但回應遺失，仍由 Jobs 去重、租約與 Queue 重試確保工作可恢復，無法保證每次都能即時回覆。
 
 ## 必須在正式帳號人工驗證
 
@@ -35,6 +47,7 @@
 - Queue 重試、DLQ、Reply Token 逾期與 Cloudflare 免費方案目前配額。
 - 重新授權流程已限制必須使用原本綁定的 Google Subject；本機只能驗證指令解析與資源重用 helper，實際 OAuth callback、Token 儲存與 Google 帳號選擇仍需由管理者以測試使用者手動驗證。
 - `JOB_IN_PROGRESS` 不寫 Errors、不改 FAILED、PROCESSING 租約回收、FAILED Job 沿用 DriveFileId、Drive appProperties 查找及清理函式目前只能由 Apps Script 手動測試及實際管理 Sheet 驗證；本機已完成 GAS 語法與 Worker retry／ack 邏輯測試。
+- 群組摘要查詢依群組 owner 的備份 Sheet 讀取；查詢權限不要求一般成員具備個人 Users／ApprovalStatus。若 owner 資源停用或 Sheet／Sheets API 暫時失敗，摘要會回覆安全提示並記錄 `group-query`，不會把錯誤轉成無回覆的 Queue retry。
 - Google／LINE／Cloudflare UI 名稱可能隨平台改版，文件以功能名稱與預期結果輔助定位。
 
 ## 未納入 MVP

@@ -31,6 +31,9 @@ Cloudflare Queue 只含 JSON 中繼資料，不含附件 bytes。附件只在一
 - `綁定` 指令先以長期固定的 `IDENTIFIER_HASH_SECRET` 對 LINE userId 做 HMAC-SHA256，再以 `BIND_TOKEN_SECRET` 簽發只含 `lineUserHash`、到期時間與 nonce 的短效 Token。Token、URL、OAuth state 與 HTML 都不含原始 LINE userId。
 - 顯示名稱由 Worker 優先透過 LINE Profile／群組成員 Profile 取得；控制字元與公式前綴會清理，查詢失敗使用 `user_<hash前8碼>` 或 `unknown_user`。顯示名稱不進安全 Log。
 - Queue consumer 為每個呼叫建立 timestamp 與 nonce，以 `timestamp.nonce.payload` 為簽署字串。GAS 處理後若回傳安全訊息，Worker 優先使用 LINE Reply API。
+- Worker Queue consumer 會在記憶體保存最近一次 GAS 呼叫的成功／失敗、HTTP 狀態碼與安全錯誤碼；私訊 `系統狀態`／`系統診斷` 不需呼叫 GAS 即可回覆。此狀態不持久化，Worker isolate 重啟後顯示 `未知`，且不包含 URL、Token、Secret 或原始識別碼。
+- GAS 回 HTTP 403 HTML 或無 JSON 的 `GAS_HTTP_ERROR` 時，Worker 會以原始 Reply Token 回覆管理者授權提示；此 fallback 不會觸發備份重做，Reply Token 過期也只記安全錯誤。
+- GAS 回報使用者 OAuth 失效時，Worker 仍將 Queue 工作交由 GAS 標記為 `OAUTH_REAUTH_REQUIRED`，不因授權錯誤而靜默 ACK 丟失 metadata；回覆失效提示後才 ACK 該次協調結果。重新授權後可用 `補備份` 重送仍有 messageId 且可下載的工作。
 - Worker 等待 GAS 的預設 timeout 為 55 秒，但 timeout 只代表 Worker 停止等待，不代表 Apps Script 執行已停止。timeout 後的 Queue 重送若遇到有效 PROCESSING 租約，GAS 會回傳 `JOB_IN_PROGRESS` 與安全延遲，Worker 必須 retry 而不可 ACK。
 - 所有指令都經 Queue，因此 Reply Token 可能在處理完成前失效。`ENABLE_PUSH_FALLBACK=true` 時，只有 Reply API 明確回報 Reply Token 無效且工作有回覆文字時，才以相同對象呼叫 Push API；Push 失敗只記安全 Log，不重做工作。
 
@@ -98,6 +101,7 @@ LINE 自動備份/
 ## 去重與失敗模型
 
 - GAS 先在 Script Lock 內用 webhookEventId 查詢 Jobs，第一次建立 `PROCESSING` 並設定 `LeaseExpiresAt`；預設租約為 600 秒。完成為 `COMPLETED`，安全拒絕為 `REJECTED`，失敗為 `FAILED`。
+- Jobs 除原有去重與 DriveFileId 外，會保存必要的安全重試 metadata（訊息型別、lineUserHash／groupIdHash／ownerLineUserHash、來源類型、檔名、訊息時間與清理後名稱）。OAuth 失效時狀態為 `OAUTH_REAUTH_REQUIRED`，不清除既有 DriveFileId。
 - Queue 重送遇到 COMPLETED、REJECTED、UNSENT 時不重新取得並可安全 ACK。租約仍有效的 PROCESSING 也不重新取得，但 GAS 會回傳 `retryable=true`、`JOB_IN_PROGRESS` 與租約剩餘秒數加 5 秒緩衝；延遲限制為 30 至 900 秒，Worker 呼叫 Queue retry，絕不 ACK 這個唯一可恢復工作。
 - FAILED 與租約已過期的 PROCESSING 可重新取得、增加 RetryCount 並保留 DriveFileId。若原執行先完成，延後重送會辨識 COMPLETED 並 ACK；若原執行中止，延後重送會在租約過期後取得工作。
 - 下載完成、Drive 上傳完成及寫入 Sheet 前後會呼叫 `touchJobLease_` 延長租約；所有終態都清空 `LeaseExpiresAt`。清理函式只刪除逾期 COMPLETED，不刪除可恢復的 PROCESSING。
@@ -122,3 +126,11 @@ LINE Reply Token 短效且只能使用一次。Queue 延遲或大檔處理可能
 - 私訊 `群組紀錄 YYYY-MM g_xxxxxxxx` 只由群組 owner 或管理者產生 10 分鐘短連結。新查詢以短碼記錄 `lineUserHash`、`groupIdHash`、期限、nonce 與 scope；Web App 仍以 owner 的 OAuth Token 讀取 owner Sheet。舊版長 Token 僅為相容用途，不再由 Bot 回覆。
 - 群組查詢優先以「群組識別」精準比對；早期空白識別的 group 紀錄，只有在查詢者為 owner／管理者、資料來自 owner Sheet、群組名稱對應唯一且沒有同名群組時，才依群組名稱 fallback，並在頁面顯示相容提示。
 - 群組內任何成員可查摘要，但完整清單、Drive 連結、匯出與查詢頁面不會公開給群組成員。
+
+## 群組補備份
+
+- 群組 owner／管理者可在群組輸入 `補備份 今日`、`補備份 YYYY-MM` 或日期區間；私訊可用 `群組補備份` 並在多群組時附上 `g_xxxxxxxx` 安全代號。一般成員不可操作，私訊也只允許 owner／管理者處理自己可授權的群組。
+- GAS 只從 owner 自己的備份 Sheet 與管理 Jobs 讀取 Bot 已收到的 webhook 紀錄，依 `groupIdHash`、日期及工作狀態篩選；舊列只有在群組名稱唯一且其他安全 fallback 條件成立時才納入。
+- GAS 以現有 `WORKER_GAS_SHARED_SECRET` 簽署 `/internal/replay` envelope，Worker 驗證後把工作分批放入主 Queue。Queue 使用原 webhookEventId／messageId、Jobs claim 租約與 Drive `lineBackupEventKey` 冪等，不會直接在 Reply 流程處理檔案或重複上傳。
+- `RETRY_REQUESTED` 只是補備份排程狀態；完成、拒絕、已收回或缺少 messageId／LINE Content 已不可取得的項目會略過。此流程不是 LINE 歷史訊息 API，無法補 Bot 收到前或系統未收到的訊息。
+- 若 owner OAuth Token 失效，群組工作先保留為 `OAUTH_REAUTH_REQUIRED`；owner 重新授權後可用 `群組補備份` 重送。群組授權失效提醒以 `groupIdHash + errorCode` 的雜湊快取 30 分鐘，避免每筆附件洗版。

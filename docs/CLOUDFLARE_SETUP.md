@@ -63,6 +63,8 @@ npx wrangler queues create line-google-drive-backup-dlq
 | `ENABLE_PUSH_FALLBACK` | `false` | 預設不補送。設為 `true` 時，只在 LINE 明確回覆 Reply Token 過期或無效、GAS 有回覆文字且有收件者時嘗試 Push；Push 可能計入 LINE 官方帳號訊息用量 |
 | `HMAC_DIAGNOSTIC_ENABLED` | `false` | 僅供一次性 `SIGNATURE_INVALID` 診斷；暫時與 GAS 同步設為 `true`，完成比對後立即改回 `false`，不會改變正式 HMAC 規則 |
 
+GAS 的 `群組補備份` 會呼叫同一 Worker 的 `POST /internal/replay`。此端點只接受以既有 `WORKER_GAS_SHARED_SECRET` 簽署的 HMAC envelope，不應公開連結或在 Log 顯示內容；請將 `<Worker URL>/internal/replay` 填入 GAS Script Property `WORKER_REPLAY_ENDPOINT`。端點本身不取代 `/webhook`，也不需要新增 Cloudflare Secret。
+
 三組 HMAC 金鑰必須分開保存：`IDENTIFIER_HASH_SECRET` 不得與 `BIND_TOKEN_SECRET` 或 `WORKER_GAS_SHARED_SECRET` 共用。`BIND_TOKEN_SECRET` 可按事件應變程序輪替，但會使尚未使用的舊 Bind Token 失效；系統已有正式資料後不可直接輪替 `IDENTIFIER_HASH_SECRET`，否則既有使用者、群組、邀請、OAuth Service 與 Drive 冪等鍵將無法對應。
 
 ## 6. 部署與預期結果

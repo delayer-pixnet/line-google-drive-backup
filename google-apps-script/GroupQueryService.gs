@@ -2,6 +2,7 @@ var GROUP_QUERY_SAFE_CODE_PATTERN_ = /^g_[a-f0-9]{8}$/i;
 var GROUP_QUERY_DATE_ERROR_MESSAGE_ = '查詢格式不正確，請使用：備份清單、今日備份清單、本週備份清單、8月備份清單、2026年8月備份清單。';
 var GROUP_QUERY_NOT_BOUND_MESSAGE_ = '本群組尚未綁定，請由已完成個人綁定的使用者輸入「綁定群組」。';
 var GROUP_QUERY_EMPTY_MESSAGE_ = '查無此期間的群組備份紀錄。';
+var GROUP_QUERY_OWNER_UNAVAILABLE_MESSAGE_ = '群組備份擁有者目前無法提供摘要，請稍後再試。';
 
 function getTaipeiDateParts_(milliseconds) {
   var value = Utilities.formatDate(new Date(milliseconds || Date.now()), 'Asia/Taipei', 'yyyy-MM-dd');
@@ -115,6 +116,63 @@ function getGroupQueryField_(record, name) {
   return record && Object.prototype.hasOwnProperty.call(record, name) ? record[name] : '';
 }
 
+function getGroupSummaryHashPrefix_(value) {
+  var text = String(value || '');
+  return /^[a-f0-9]{64}$/i.test(text) ? text.slice(0, 8).toLowerCase() : '';
+}
+
+function getGroupSummaryCommandLabel_(rawText) {
+  var text = String(rawText || '').trim();
+  if (text === '本週備份清單') {
+    return 'weekly-summary';
+  }
+  if (text === '今日備份清單') {
+    return 'daily-summary';
+  }
+  if (text === '備份清單') {
+    return 'monthly-summary';
+  }
+  if (/^(?:\d{1,2}月|\d{4}年\d{1,2}月|\d{4}-\d{2})備份清單$/u.test(text)) {
+    return 'monthly-summary';
+  }
+  return 'invalid-summary';
+}
+
+function logGroupSummaryAccess_(job, group, owner, allowedSummary) {
+  var senderHash = job && job.lineUserHash;
+  var groupHash = job && job.groupIdHash;
+  var isOwner = Boolean(group && senderHash && group.OwnerLineUserHash === senderHash);
+  var isAdmin = Boolean(senderHash && isAdminLineUserHash_(senderHash));
+  console.info(JSON.stringify({
+    component: 'group-query',
+    command: getGroupSummaryCommandLabel_(job && job.rawText),
+    sourceType: 'group',
+    groupHashPrefix: getGroupSummaryHashPrefix_(groupHash),
+    senderHashPrefix: getGroupSummaryHashPrefix_(senderHash),
+    isOwner: isOwner,
+    isAdmin: isAdmin,
+    allowedSummary: allowedSummary === true,
+    ownerEnabled: Boolean(owner && isEnabledUserValue_(owner.Enabled)),
+    correlationId: String(job && job.webhookEventId || 'group-query').slice(0, 100)
+  }));
+}
+
+/** 群組摘要只需要群組已啟用及 owner 已啟用，不檢查查詢發話者的 Users 或核准狀態。 */
+function findGroupSummaryOwner_(group) {
+  if (!group || !group.OwnerLineUserHash) {
+    return null;
+  }
+  var owner = findUserByHash_(group.OwnerLineUserHash);
+  return owner && isEnabledUserValue_(owner.Enabled) && owner.SheetId ? owner : null;
+}
+
+function canUseGroupSummary_(group, owner) {
+  return Boolean(
+    group && group.Enabled === true && owner &&
+    isEnabledUserValue_(owner.Enabled) && owner.SheetId
+  );
+}
+
 function isSuccessfulGroupRecord_(record) {
   return ['完成', '已備份', '成功', 'COMPLETED', 'SUCCESS'].indexOf(
     String(getGroupQueryField_(record, '狀態') || '').trim()
@@ -137,6 +195,45 @@ function sanitizeGroupSummaryText_(value, maximumLength) {
     .replace(/[\r\n]+/g, ' ')
     .trim()
     .slice(0, maximumLength || 80);
+}
+
+function sanitizeGroupSummaryLabel_(value, maximumLength, fallback) {
+  var sanitized = sanitizeGroupSummaryText_(value, maximumLength || 80)
+    .replace(/^[=+\-@]+/u, '')
+    .trim();
+  return sanitized || (fallback || '');
+}
+
+function formatGroupSummaryRecordDate_(record) {
+  var milliseconds = parseStoredDateMilliseconds_(getGroupQueryField_(record, 'LINE 訊息時間'));
+  if (Number.isFinite(milliseconds)) {
+    return Utilities.formatDate(new Date(milliseconds), 'Asia/Taipei', 'MM/dd HH:mm');
+  }
+  return sanitizeGroupSummaryText_(String(getGroupQueryField_(record, 'LINE 訊息時間') || '').slice(0, 16), 16);
+}
+
+function getGroupSummarySenderName_(record) {
+  return sanitizeGroupSummaryLabel_(getGroupQueryField_(record, '傳送者名稱'), 24, 'unknown_user');
+}
+
+function getGroupSummaryImageDisplayName_(record) {
+  var originalName = sanitizeGroupSummaryLabel_(getGroupQueryField_(record, '原始檔名'), 48, '');
+  if (originalName) {
+    return originalName;
+  }
+  var timestamp = parseStoredDateMilliseconds_(getGroupQueryField_(record, 'LINE 訊息時間'));
+  var timestampText = Number.isFinite(timestamp)
+    ? Utilities.formatDate(new Date(timestamp), 'Asia/Taipei', 'yyyyMMdd_HHmmss')
+    : 'unknown_time';
+  var imageSetIndex = getGroupQueryField_(record, 'imageSetIndex') ||
+    getGroupQueryField_(record, 'imageSet.index') || getGroupQueryField_(record, '圖片序號');
+  var numericIndex = Number(imageSetIndex);
+  var suffix = Number.isInteger(numericIndex) && numericIndex > 0 && numericIndex < 100
+    ? String(numericIndex).padStart(2, '0')
+    : (String(getGroupQueryField_(record, 'messageId') || '').trim()
+      ? hashIdentifier_('GROUP_SUMMARY_IMAGE:' + String(getGroupQueryField_(record, 'messageId')).trim()).slice(0, 8)
+      : 'unknown');
+  return sanitizeGroupSummaryLabel_('image_' + timestampText + '_' + suffix + '.jpg', 60, 'image.jpg');
 }
 
 function canUseLegacyGroupNameFallback_(group) {
@@ -230,12 +327,16 @@ function formatGroupSummaryReply_(group, query, summary) {
   summary.records.slice(0, 5).forEach(function (record, index) {
     var typeNames = { image: '圖片', video: '影片', audio: '音訊', file: '檔案', note: '筆記', text: '文字' };
     var type = getGroupSummaryRecordType_(record);
-    var dateText = sanitizeGroupSummaryText_(String(getGroupQueryField_(record, 'LINE 訊息時間') || '').slice(5, 10).replace('-', '/'), 10);
-    var name = getGroupQueryField_(record, '原始檔名') || getGroupQueryField_(record, '文字內容') || typeNames[type] || '紀錄';
+    var dateText = formatGroupSummaryRecordDate_(record);
+    var name = type === 'image'
+      ? getGroupSummaryImageDisplayName_(record)
+      : getGroupQueryField_(record, '原始檔名') || getGroupQueryField_(record, '文字內容') || typeNames[type] || '紀錄';
     if (type === 'note') {
       name = String(name).replace(/^#筆記\s*/u, '');
     }
-    lines.push((index + 1) + '. ' + dateText + ' ' + (typeNames[type] || '檔案') + '：' + sanitizeGroupSummaryText_(name, 60));
+    var senderName = getGroupSummarySenderName_(record);
+    lines.push((index + 1) + '. ' + dateText + ' ' + (typeNames[type] || '檔案') + '：' +
+      sanitizeGroupSummaryLabel_(senderName + ' ' + name, 76, 'unknown_user'));
   });
   lines.push('', '群組內只顯示摘要，不顯示 Drive 檔案連結。');
   if (summary.legacyFallback) {
@@ -249,24 +350,27 @@ function getGroupBackupSummaryReply_(job) {
   if (!job.groupIdHash) {
     return '群組備份清單請在 LINE 群組內查詢。';
   }
+  var group = findEnabledGroupByHash_(job.groupIdHash);
+  var owner = findGroupSummaryOwner_(group);
+  logGroupSummaryAccess_(job, group, owner, canUseGroupSummary_(group, owner));
   var query = parseGroupSummaryQuery_(job.rawText, Date.now());
   if (!query) {
     return GROUP_QUERY_DATE_ERROR_MESSAGE_;
   }
-  var group = findEnabledGroupByHash_(job.groupIdHash);
   if (!group) {
     return GROUP_QUERY_NOT_BOUND_MESSAGE_;
   }
-  var owner = findEnabledUserByHash_(group.OwnerLineUserHash);
   if (!owner || !owner.SheetId) {
-    return GROUP_QUERY_NOT_BOUND_MESSAGE_;
+    return GROUP_QUERY_OWNER_UNAVAILABLE_MESSAGE_;
   }
   try {
     return formatGroupSummaryReply_(group, query, buildGroupSummary_(group, owner, query));
   } catch (error) {
     var appError = isAppError_(error) ? error : createAppError_('GROUP_QUERY_FAILED', true, '暫時無法查詢群組備份清單，請稍後再試。');
     safeLog_('warn', 'group-query', appError.appCode, job.webhookEventId || 'group-query');
-    throw createAppError_('GROUP_QUERY_FAILED', true, '暫時無法查詢群組備份清單，請稍後再試。');
+    return appError.appCode === 'GROUP_IDENTIFIER_MISSING'
+      ? appError.safeMessage
+      : '暫時無法查詢群組備份清單，請稍後再試。';
   }
 }
 

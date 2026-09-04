@@ -5,6 +5,8 @@ describe("指令解析", () => {
   it.each([
     ["綁定 ABCD-1234", "bind", "ABCD-1234"],
     ["狀態", "status", ""],
+    ["系統狀態", "systemStatus", ""],
+    ["系統診斷", "systemStatus", ""],
     ["重新授權", "reauthorize", ""],
     ["解除綁定", "unbind", ""],
     ["綁定群組", "bindGroup", ""],
@@ -33,6 +35,13 @@ describe("指令解析", () => {
     ["空間", "quota", ""],
     ["Drive容量", "quota", ""],
     ["群組容量", "groupQuota", ""],
+    ["補備份 今日", "groupReplay", "今日"],
+    ["補備份 2026-08-01 至 2026-08-10", "groupReplay", "2026-08-01 至 2026-08-10"],
+    ["補備份 8月", "groupReplay", "8月"],
+    ["補備份 2026年8月", "groupReplay", "2026年8月"],
+    ["補備份 2026-08", "groupReplay", "2026-08"],
+    ["群組補備份", "manualGroupReplay", ""],
+    ["群組補備份 2026-08 g_abcdef12", "manualGroupReplay", "2026-08 g_abcdef12"],
     ["#筆記 要保存的內容", "note", "要保存的內容"],
     ["說明", "help", ""],
   ])("解析 %s", (input, name, argument) => {

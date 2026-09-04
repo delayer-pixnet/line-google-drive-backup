@@ -29,6 +29,14 @@ function getOAuthServiceDiagnosticKey_(lineUserHash) {
   }
 }
 
+function getOAuthNotBoundMessage_() {
+  return '尚未完成 Google 帳號綁定，請私訊輸入「綁定」開始設定。';
+}
+
+function getOAuthTokenExpiredMessage_() {
+  return 'Google 授權已失效，請私訊輸入「重新授權」重新連結 Google 帳號。既有備份資料不會被刪除。';
+}
+
 function createOAuthTokenCorrelationId_() {
   return 'oauth-token-' + Utilities.getUuid().replace(/-/g, '').slice(0, 20);
 }
@@ -80,6 +88,12 @@ function getGoogleOAuthService_(lineUserHash) {
 function getUserAccessToken_(lineUserHash) {
   var correlationId = createOAuthTokenCorrelationId_();
   var service;
+  var existingUser = null;
+  try {
+    existingUser = findUserByHash_(lineUserHash);
+  } catch (userLookupError) {
+    existingUser = null;
+  }
   try {
     service = getGoogleOAuthService_(lineUserHash);
   } catch (error) {
@@ -88,13 +102,19 @@ function getUserAccessToken_(lineUserHash) {
   }
   try {
     if (!service.hasAccess()) {
-      logOAuthTokenState_(lineUserHash, false, 'OAUTH_TOKEN_MISSING', correlationId);
-      throw createAppError_('OAUTH_NOT_BOUND', false, '尚未完成 Google 綁定。');
+      var missingTokenCode = existingUser ? 'OAUTH_TOKEN_MISSING' : 'OAUTH_NOT_BOUND';
+      var missingTokenMessage = existingUser ? getOAuthTokenExpiredMessage_() : getOAuthNotBoundMessage_();
+      logOAuthTokenState_(lineUserHash, false, missingTokenCode, correlationId);
+      var missingTokenError = createAppError_(missingTokenCode, false, missingTokenMessage);
+      missingTokenError.correlationId = correlationId;
+      throw missingTokenError;
     }
     var accessToken = service.getAccessToken();
     if (typeof accessToken !== 'string' || accessToken.length === 0) {
       logOAuthTokenState_(lineUserHash, false, 'OAUTH_TOKEN_EMPTY', correlationId);
-      throw createAppError_('OAUTH_TOKEN_READ_FAILED', false, 'Google 授權已失效，請重新授權。');
+      var emptyTokenError = createAppError_('OAUTH_TOKEN_READ_FAILED', false, getOAuthTokenExpiredMessage_());
+      emptyTokenError.correlationId = correlationId;
+      throw emptyTokenError;
     }
     logOAuthTokenState_(lineUserHash, true, 'OAUTH_TOKEN_AVAILABLE', correlationId);
     return accessToken;
@@ -103,8 +123,61 @@ function getUserAccessToken_(lineUserHash) {
       throw error;
     }
     logOAuthTokenState_(lineUserHash, false, 'OAUTH_TOKEN_READ_FAILED', correlationId);
-    throw createAppError_('OAUTH_TOKEN_READ_FAILED', true, '暫時無法讀取 Google 授權，請稍後再試。');
+    var tokenReadError = createAppError_('OAUTH_TOKEN_READ_FAILED', true, '暫時無法讀取 Google 授權，請稍後再試。');
+    tokenReadError.correlationId = correlationId;
+    throw tokenReadError;
   }
+}
+
+/** 只回傳授權狀態與安全 metadata，不回傳任何 Token 值。 */
+function getOAuthTokenStatus_(lineUserHash) {
+  var status = {
+    hasToken: false,
+    hasAccessToken: false,
+    hasRefreshToken: false,
+    hasAccess: false,
+    expiresAt: null,
+    expiresIn: null,
+    refreshTokenExpiresIn: null
+  };
+  var service;
+  try {
+    service = getGoogleOAuthService_(lineUserHash);
+    status.hasAccess = service.hasAccess() === true;
+  } catch (error) {
+    return status;
+  }
+  try {
+    if (typeof service.getToken !== 'function') {
+      return status;
+    }
+    var token = service.getToken();
+    if (!token || typeof token !== 'object') {
+      return status;
+    }
+    status.hasToken = true;
+    status.hasAccessToken = typeof token.access_token === 'string' && token.access_token.length > 0;
+    status.hasRefreshToken = typeof token.refresh_token === 'string' && token.refresh_token.length > 0;
+    status.expiresAt = getOAuthStatusNumber_(token.expiresAt !== undefined ? token.expiresAt : token.expires_at);
+    status.expiresIn = getOAuthStatusNumber_(
+      token.expires_in_sec !== undefined
+        ? token.expires_in_sec
+        : token.expires_in !== undefined ? token.expires_in : token.expires
+    );
+    status.refreshTokenExpiresIn = getOAuthStatusNumber_(
+      token.refreshTokenExpiresIn !== undefined
+        ? token.refreshTokenExpiresIn
+        : token.refresh_token_expires_in
+    );
+  } catch (error) {
+    // Token metadata 讀取失敗不影響狀態指令；hasAccess 仍可作為主要判斷。
+  }
+  return status;
+}
+
+function getOAuthStatusNumber_(value) {
+  var number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
 
 function renderBindPage_(bindToken) {

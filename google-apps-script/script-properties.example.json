@@ -8,6 +8,7 @@
   "ADMIN_SPREADSHEET_ID": "replace-with-admin-spreadsheet-id",
   "MAX_FILE_SIZE_BYTES": "20971520",
   "APP_BASE_URL": "https://script.google.com/macros/s/replace-with-deployment-id/exec",
+  "WORKER_REPLAY_ENDPOINT": "https://line-google-drive-backup.example.workers.dev/internal/replay",
   "DELETE_DRIVE_ON_UNSEND": "false",
   "ERROR_RETENTION_DAYS": "30",
   "COMPLETED_JOB_RETENTION_DAYS": "90",
@@ -15,5 +16,6 @@
   "HMAC_DIAGNOSTIC_ENABLED": "false",
   "ADMIN_LINE_USER_HASHES": "replace-with-comma-separated-64-char-line-user-hashes",
   "ENABLE_SELF_SERVICE_BINDING": "true",
-  "REQUIRE_ADMIN_APPROVAL": "true"
+  "REQUIRE_ADMIN_APPROVAL": "true",
+  "TEST_LINE_USER_HASH": "replace-with-64-char-lowercase-line-user-hash-for-manual-test"
 }

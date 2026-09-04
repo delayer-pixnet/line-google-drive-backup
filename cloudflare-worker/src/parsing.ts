@@ -2,6 +2,8 @@ import type { ParsedCommand } from "./types";
 
 const EXACT_COMMANDS: Readonly<Record<string, ParsedCommand["name"]>> = {
   "狀態": "status",
+  "系統狀態": "systemStatus",
+  "系統診斷": "systemStatus",
   "重新授權": "reauthorize",
   "解除綁定": "unbind",
   "綁定群組": "bindGroup",
@@ -15,6 +17,8 @@ const EXACT_COMMANDS: Readonly<Record<string, ParsedCommand["name"]>> = {
   "空間": "quota",
   "Drive容量": "quota",
   "群組容量": "groupQuota",
+  "補備份": "groupReplay",
+  "群組補備份": "manualGroupReplay",
   "待審核": "pendingApproval",
   "說明": "help",
 };
@@ -36,6 +40,12 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
   if (/^群組紀錄(?:\s|$)/u.test(normalized)) {
     return { name: "groupRecords", argument: normalized.slice(4).trim() };
+  }
+  if (/^群組補備份(?:\s|$)/u.test(normalized)) {
+    return { name: "manualGroupReplay", argument: normalized.replace(/^群組補備份\s*/u, "") };
+  }
+  if (/^補備份(?:\s|$)/u.test(normalized)) {
+    return { name: "groupReplay", argument: normalized.slice(3).trim() };
   }
   if (/^確認拒絕全部(?:\s|$)/u.test(normalized)) {
     return { name: "confirmRejectAll", argument: normalized.replace(/^確認拒絕全部\s*/u, "") };

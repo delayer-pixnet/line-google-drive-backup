@@ -93,7 +93,16 @@ function doPost(request) {
       return jsonOutput_({ ok: true });
     }
     var result = processJob_(job);
-    if (result.jobStatus === 'REJECTED') {
+    if (result.jobStatus === JOB_OAUTH_REAUTH_REQUIRED_STATUS_ ||
+        result.jobStatus === JOB_RETRY_PENDING_REAUTH_STATUS_) {
+      updateJob_(
+        job.webhookEventId,
+        result.jobStatus,
+        preserveJobDriveFileId_(),
+        result.errorCode || 'OAUTH_REAUTH_REQUIRED',
+        result.safeMessage || 'Google 授權已失效，請重新授權。'
+      );
+    } else if (result.jobStatus === 'REJECTED') {
       rejectJob_(job.webhookEventId, result.errorCode || 'REJECTED', result.safeMessage || '工作已安全拒絕。');
     } else {
       completeJob_(job.webhookEventId, result.driveFileId || '');
@@ -194,11 +203,16 @@ function getHelpMessage_(job) {
       '今日備份清單：查詢今天群組備份摘要',
       '本週備份清單：查詢本週群組備份摘要',
       '8月備份清單：查詢指定月份群組備份摘要',
+      '補備份 今日：補處理今天失敗或未完成的群組備份項目',
+      '補備份 2026-08：補處理指定月份失敗或未完成的群組備份項目',
       '',
       '群組附件備份規則：',
       '群組已綁定後，成員傳送圖片、影片、音訊、PDF、DOCX、XLSX、TXT、XML 等檔案，會備份到群組備份擁有者的 Google Drive。',
       '群組附件成功預設不回覆，避免洗版。',
       '群組 #筆記 成功會回覆「✅ 筆記已備份。」',
+      '若群組備份擁有者授權失效，請 owner 私訊 Bot 輸入「重新授權」。',
+      '補備份只能處理 LineBot 已收到過的訊息，無法抓取 Bot 加入前的 LINE 歷史紀錄。',
+      '補備份僅限群組備份擁有者或管理者使用。',
       '',
       '個人綁定、紀錄查詢、容量查詢與管理者審核指令請私訊 Bot 執行。'
     ].join('\n');
@@ -217,6 +231,7 @@ function getHelpMessage_(job) {
     '直接傳文字、圖片、影片、音訊或檔案給 Bot，即可備份到自己的 Google Drive。',
     '支援常見檔案格式，例如 PDF、TXT、XML、DOCX、XLSX。',
     '單檔大小限制：20 MB 以下。',
+    '補備份 今日：重新處理自己曾收到但尚未完成的附件。',
     '',
     '【紀錄查詢】',
     '紀錄：取得 10 分鐘有效的 LINE 記錄搜尋中心連結',
@@ -229,12 +244,18 @@ function getHelpMessage_(job) {
     '',
       '【群組使用】',
       '#筆記 <內容>：在已綁定群組中保存文字筆記',
-      '群組附件會備份到群組備份擁有者的 Google Drive。',
-      '群組紀錄：群組備份擁有者可私訊查詢完整紀錄',
+    '群組附件會備份到群組備份擁有者的 Google Drive。',
+    '群組紀錄：群組備份擁有者可私訊查詢完整紀錄',
     '個人綁定請私訊 Bot 執行。',
     '',
     '說明：顯示本說明'
   ];
+  if (job && job.lineUserHash && hasManualReplayGroupAccess_(job.lineUserHash)) {
+    lines.splice(lines.length - 2, 0,
+      '群組補備份：補處理自己擁有群組的失敗或未完成備份項目',
+      '群組補備份 2026-08 g_xxxxxxxx：補處理指定群組月份資料'
+    );
+  }
   if (job && job.lineUserHash && isAdminLineUserHash_(job.lineUserHash)) {
     lines.push('', '【管理者指令】（僅管理者可見）');
     lines.push('待審核：查看待審核使用者');
@@ -244,11 +265,83 @@ function getHelpMessage_(job) {
     lines.push('拒絕全部：建立整批拒絕確認碼');
     lines.push('確認核准全部 <確認碼>：執行整批核准');
     lines.push('確認拒絕全部 <確認碼>：執行整批拒絕');
+    lines.push('系統狀態：檢查 Worker／Queue／GAS 最近狀態');
+    lines.push('系統診斷：同「系統狀態」，顯示安全錯誤代碼');
   }
   return lines.join('\n');
 }
 
+function getOAuthExpiryMinutes_(tokenStatus) {
+  if (!tokenStatus) {
+    return null;
+  }
+  var nowSeconds = Math.floor(Date.now() / 1000);
+  var expiresAt = Number(tokenStatus.expiresAt);
+  if (Number.isSafeInteger(expiresAt) && expiresAt > 0) {
+    // OAuth2 Library 版本可能以秒或毫秒保存 expiresAt。
+    if (expiresAt > 100000000000) {
+      expiresAt = Math.floor(expiresAt / 1000);
+    }
+    return Math.max(0, Math.ceil((expiresAt - nowSeconds) / 60));
+  }
+  var expiresIn = Number(tokenStatus.expiresIn);
+  return Number.isSafeInteger(expiresIn) && expiresIn >= 0
+    ? Math.ceil(expiresIn / 60)
+    : null;
+}
+
+function buildPersonalStatusReply_(lineUserHash, user) {
+  var approvalStatus = getUserApprovalStatus_(user);
+  var enabled = isEnabledUserValue_(user && user.Enabled);
+  var lines = [];
+  if (!enabled || approvalStatus !== USER_APPROVAL_STATUS_.APPROVED) {
+    lines.push(
+      approvalStatus === USER_APPROVAL_STATUS_.PENDING
+        ? 'Google 帳號：等待管理者審核'
+        : approvalStatus === USER_APPROVAL_STATUS_.REJECTED
+          ? 'Google 帳號：審核未通過'
+          : 'Google 帳號：尚未啟用'
+    );
+    return lines.join('\n');
+  }
+  var tokenStatus = getOAuthTokenStatus_(lineUserHash);
+  var correlationId = createOAuthTokenCorrelationId_();
+  logOAuthTokenState_(lineUserHash, tokenStatus.hasToken, tokenStatus.hasAccess ? 'STATUS_AUTHORIZED' : 'STATUS_REAUTH_REQUIRED', correlationId);
+  lines.push('Google 帳號：已綁定');
+  lines.push('Google 授權：' + (tokenStatus.hasAccess ? '正常' : '失效'));
+  if (tokenStatus.hasAccess) {
+    var minutes = getOAuthExpiryMinutes_(tokenStatus);
+    lines.push('Access Token：有效' + (minutes === null ? '' : '，約 ' + minutes + ' 分鐘後到期'));
+  } else {
+    lines.push('Access Token：目前無法使用');
+  }
+  lines.push('Refresh Token：' + (tokenStatus.hasRefreshToken ? '存在，可自動刷新' : '不存在'));
+  lines.push('最後授權檢查：' + Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyy/MM/dd HH:mm'));
+  if (!tokenStatus.hasAccess) {
+    lines.push('Google 授權已失效，請輸入「重新授權」。既有備份資料不會被刪除。');
+  }
+  return lines.join('\n');
+}
+
+function buildOwnedGroupStatusLines_(lineUserHash) {
+  var groups = getSheetRecords_('Groups').filter(function (record) {
+    return record.OwnerLineUserHash === lineUserHash && isEnabledUserValue_(record.Enabled);
+  });
+  var lines = ['管理中的群組：' + groups.length + ' 個'];
+  groups.slice(0, 10).forEach(function (group, index) {
+    lines.push((index + 1) + '. ' + sanitizeDisplayNameForSheet_(group.GroupName, '未命名群組'));
+  });
+  if (groups.length > 10) {
+    lines.push('其餘 ' + (groups.length - 10) + ' 個群組略。');
+  }
+  return lines;
+}
+
 function processCommand_(job) {
+  // 群組摘要是群組層級的唯讀功能；成員不需個人綁定、核准或 owner 身分。
+  if (job.groupIdHash && job.command === 'groupSummary') {
+    return { replyMessage: getGroupBackupSummaryReply_(job) };
+  }
   if (!job.lineUserHash) {
     return { replyMessage: 'LINE 未提供傳送者識別，無法執行此指令。' };
   }
@@ -316,11 +409,14 @@ function processCommand_(job) {
   if (job.command === 'records') {
     return { replyMessage: createRecordQueryLink_(lineUserHash) };
   }
-  if (job.command === 'groupSummary') {
-    return { replyMessage: getGroupBackupSummaryReply_(job) };
-  }
   if (job.command === 'groupRecords') {
     return { replyMessage: getGroupRecordQueryReply_(lineUserHash, job) };
+  }
+  if (job.command === 'groupReplay' || job.command === 'manualGroupReplay') {
+    if (job.command === 'groupReplay' && !job.groupIdHash) {
+      return { replyMessage: getPersonalReplayReply_(job) };
+    }
+    return { replyMessage: getManualGroupReplayReply_(job) };
   }
   if (job.command === 'quota') {
     return { replyMessage: getPersonalDriveQuotaReply_(lineUserHash) };
@@ -388,20 +484,12 @@ function processCommand_(job) {
       };
     }
     var user = findUserByHash_(lineUserHash);
-    var userStatus = getUserApprovalStatus_(user);
-    var userStatusMessage = !user
-      ? 'Google 帳號：尚未綁定'
-      : userStatus === USER_APPROVAL_STATUS_.PENDING
-        ? 'Google 帳號：等待管理者審核'
-        : userStatus === USER_APPROVAL_STATUS_.REJECTED
-          ? 'Google 帳號：審核未通過'
-          : 'Google 帳號：已綁定';
-    var ownedGroups = getSheetRecords_('Groups').filter(function (record) {
-      return record.OwnerLineUserHash === lineUserHash && record.Enabled === true;
-    });
+    if (!user) {
+      return { replyMessage: 'Google 帳號：尚未綁定\n請私訊輸入「綁定」開始設定。' };
+    }
     return {
-      replyMessage: userStatusMessage +
-        '\n管理中的群組：' + ownedGroups.length + ' 個'
+      replyMessage: buildPersonalStatusReply_(lineUserHash, user) +
+        '\n\n' + buildOwnedGroupStatusLines_(lineUserHash).join('\n')
     };
   }
   if (job.command === 'unbind') {
@@ -470,6 +558,9 @@ function getGroupCommandRestrictionMessage_(command) {
   }
   if (command === 'groupRecords') {
     return '群組完整紀錄請私訊 Bot 執行。';
+  }
+  if (command === 'manualGroupReplay') {
+    return '群組補備份請私訊 Bot 執行。';
   }
   if (command === 'quota' || command === 'groupQuota') {
     return '容量資訊屬於個人 Google Drive，請私訊 Bot 輸入「容量」查詢。';
@@ -597,7 +688,7 @@ function resolveBackupContext_(job) {
   }
   var user = findUserByHash_(senderHash);
   if (!user) {
-    throw createAppError_('USER_NOT_BOUND', false, '尚未綁定 Google 帳號，請先輸入「綁定 邀請碼」。');
+    throw createAppError_('USER_NOT_BOUND', false, getOAuthNotBoundMessage_());
   }
   if (!isApprovedEnabledUser_(user)) {
     throw createAppError_('USER_NOT_APPROVED', false, '你的帳號尚未審核通過，請等待管理者核准。');
@@ -651,7 +742,16 @@ function createBackupSuccessResult_(job, driveFileId) {
 
 function backupMessage_(job) {
   var context = resolveBackupContext_(job);
-  var accessToken = getUserAccessToken_(context.ownerHash);
+  updateJobMetadata_(job.webhookEventId, job, context);
+  var accessToken;
+  try {
+    accessToken = getUserAccessToken_(context.ownerHash);
+  } catch (error) {
+    if (isOAuthReauthFailure_(error)) {
+      return createOAuthReauthResult_(job, context, error);
+    }
+    throw error;
+  }
   var baseRecord = {
     messageTimestamp: job.timestamp,
     sourceType: context.sourceType,
@@ -672,33 +772,33 @@ function backupMessage_(job) {
     status: '完成',
     errorMessage: ''
   };
-  if (job.messageType === 'text') {
-    touchJobLease_(job.webhookEventId);
-    appendBackupRecord_(accessToken, context.sheetId, baseRecord);
-    touchJobLease_(job.webhookEventId);
-    return createBackupSuccessResult_(job, null);
-  }
-  if (job.rejectionCode === 'FILE_TOO_LARGE') {
-    baseRecord.status = '拒絕';
-    baseRecord.errorMessage = '附件超過允許的單檔大小。';
-    touchJobLease_(job.webhookEventId);
-    appendBackupRecord_(accessToken, context.sheetId, baseRecord);
-    touchJobLease_(job.webhookEventId);
-    return {
-      jobStatus: 'REJECTED',
-      errorCode: 'FILE_TOO_LARGE',
-      safeMessage: baseRecord.errorMessage,
-      replyMessage: baseRecord.errorMessage
-    };
-  }
-  var existingJob = findJobByWebhookId_(job.webhookEventId);
-  var driveFile = existingJob && existingJob.DriveFileId
-    ? {
-        id: String(existingJob.DriveFileId),
-        webViewLink: 'https://drive.google.com/open?id=' + encodeURIComponent(String(existingJob.DriveFileId))
-      }
-    : null;
   try {
+    if (job.messageType === 'text') {
+      touchJobLease_(job.webhookEventId);
+      appendBackupRecord_(accessToken, context.sheetId, baseRecord);
+      touchJobLease_(job.webhookEventId);
+      return createBackupSuccessResult_(job, null);
+    }
+    if (job.rejectionCode === 'FILE_TOO_LARGE') {
+      baseRecord.status = '拒絕';
+      baseRecord.errorMessage = '附件超過允許的單檔大小。';
+      touchJobLease_(job.webhookEventId);
+      appendBackupRecord_(accessToken, context.sheetId, baseRecord);
+      touchJobLease_(job.webhookEventId);
+      return {
+        jobStatus: 'REJECTED',
+        errorCode: 'FILE_TOO_LARGE',
+        safeMessage: baseRecord.errorMessage,
+        replyMessage: baseRecord.errorMessage
+      };
+    }
+    var existingJob = findJobByWebhookId_(job.webhookEventId);
+    var driveFile = existingJob && existingJob.DriveFileId
+      ? {
+          id: String(existingJob.DriveFileId),
+          webViewLink: 'https://drive.google.com/open?id=' + encodeURIComponent(String(existingJob.DriveFileId))
+        }
+      : null;
     if (!driveFile) {
       touchJobLease_(job.webhookEventId);
       var targetFolderId = ensureDatedTypeFolder_(
@@ -731,6 +831,9 @@ function backupMessage_(job) {
     touchJobLease_(job.webhookEventId);
     return createBackupSuccessResult_(job, driveFile.id);
   } catch (error) {
+    if (isOAuthReauthFailure_(error)) {
+      return createOAuthReauthResult_(job, context, error);
+    }
     if (isAppError_(error) && error.appCode === 'FILE_TOO_LARGE') {
       baseRecord.status = '拒絕';
       baseRecord.errorMessage = error.safeMessage;

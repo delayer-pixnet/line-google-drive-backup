@@ -85,6 +85,73 @@ describe("Queue consumer", () => {
     });
   });
 
+  it("系統狀態在 Worker 層回覆，不依賴 GAS", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+    const systemMessage = {
+      ...current.message,
+      body: { ...queueJob, command: "systemStatus", shouldSave: false },
+    } as unknown as Message<QueueJob>;
+
+    await processQueueMessage(systemMessage, createEnv());
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/message/reply");
+    const requestBodyValue = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    const requestBody = typeof requestBodyValue === "string" ? requestBodyValue : JSON.stringify(requestBodyValue);
+    expect(requestBody).toContain("Worker：正常");
+    expect(requestBody).toContain("Queue：已設定");
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("GAS 403 HTML 會使用 Reply API 提醒管理者授權", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("<html>forbidden</html>", {
+        status: 403,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv());
+
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
+    const replyBodyValue = (fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body;
+    const replyBody = typeof replyBodyValue === "string" ? replyBodyValue : JSON.stringify(replyBodyValue);
+    expect(replyBody).toContain("testOwnerAuthorizationHealth");
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+    expect(logOutput.join("\n")).not.toContain("<html>");
+  });
+
+  it("系統診斷可顯示最近 GAS 安全錯誤碼且不依賴 GAS", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      ok: false,
+      retryable: false,
+      errorCode: "GAS_AUTH_FAILED",
+    })));
+    await processQueueMessage(createMessage().message, createEnv());
+
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+    const diagnosticMessage = {
+      ...current.message,
+      body: { ...queueJob, command: "systemStatus", rawText: "系統診斷", shouldSave: false },
+    } as unknown as Message<QueueJob>;
+    await processQueueMessage(diagnosticMessage, createEnv());
+
+    const requestBodyValue = (fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body;
+    const requestBody = typeof requestBodyValue === "string" ? requestBodyValue : JSON.stringify(requestBodyValue);
+    expect(requestBody).toContain("最近 GAS 呼叫狀態：失敗");
+    expect(requestBody).toContain("GAS_AUTH_FAILED");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(current.ack).toHaveBeenCalledOnce();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -226,6 +293,23 @@ describe("Queue consumer", () => {
 
     await processQueueMessage(current.message, createEnv());
 
+    expect(current.ack).toHaveBeenCalledOnce();
+    expect(current.retry).not.toHaveBeenCalled();
+  });
+
+  it("OAuth 失效回應會 Reply 後 ACK，不會重新執行工作", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        ok: true,
+        replyMessage: "Google 授權已失效，請重新授權。",
+      }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = createMessage();
+
+    await processQueueMessage(current.message, createEnv());
+
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/message/reply");
     expect(current.ack).toHaveBeenCalledOnce();
     expect(current.retry).not.toHaveBeenCalled();
   });

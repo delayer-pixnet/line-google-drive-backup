@@ -17,12 +17,13 @@
 | 綁定連結立即過期 | 伺服器時間、Token 過期、BindingSessions 缺列、`BIND_TOKEN_SECRET` 或 `IDENTIFIER_HASH_SECRET` 不同 | 核對 Asia/Taipei 時間、兩端相應金鑰與 BindingSessions；頁面重新整理本身不會消耗 nonce | 顯示授權按鈕 |
 | Google `redirect_uri_mismatch` | 使用 `/exec` 或 Deployment ID | Client redirect 改為 `/macros/d/<SCRIPT_ID>/usercallback` | 進入 consent screen |
 | Google App blocked／無法存取 | 使用者不在 Test users、Workspace 管理政策 | 將指定朋友加入測試清單，或請其組織管理者依政策處理 | 指定帳號可看到 consent |
-| 約 7 天後需重綁 | External OAuth App 仍是 Testing | 依 Google 政策評估 Production／驗證；測試期先重綁 | Refresh Token 可按預期持續 |
+| 約 7 天後需重綁 | External OAuth App 仍是 Testing，且使用 `drive.file` 等非基本身分 scope | 管理者依 `GOOGLE_CLOUD_SETUP.md` 將 App 發布到 Production；發布後已失效帳號各執行一次 `重新授權` | 新授權不再因 Testing 模式週期性失效（仍受 Google 政策與撤銷影響） |
 | OAuth callback 失敗 | Client ID／Secret 錯、Library 缺少、state／BindingSession 無效或 callback 已重送 | 核對 Script Properties、OAuth2 identifier `OAuth2`、版本與 callback；不要輸出 state 或 nonce | 首次 callback 進入授權／初始化；完成後重送安全拒絕 |
 | Google 已授權但初始化失敗 | Drive／Sheets 配額、暫時性 API 錯誤或 Apps Script 中止 | 先排除外部錯誤；確認 BindingSessions 為 `AUTHORIZED`、`PROVISIONING` 或 `FAILED`。暫設 `BINDING_RECOVERY_LINE_USER_HASH` 為該列 64 位雜湊後，無參數執行 `resumeAuthorizedBinding` | 重用部分資源並完成 Users；暫存 Property 自動刪除，邀請只扣 1 次 |
 | 需要讓失敗綁定重新授權 | 測試部署期 OAuth Service 內仍保留失敗授權 Token | 管理者暫設 `BINDING_RECOVERY_LINE_USER_HASH` 為 64 位雜湊，手動執行 `clearOAuthTokenForRecoveryLineUserHash`；執行後 Property 會自動刪除，未完成 BindingSessions 會標示 `FAILED` | 該使用者可用新的綁定流程重新授權；不刪 Users、Groups、Invitations 或 Drive 檔案 |
 | OAuth 取消或初始化失敗但邀請次數減少 | 使用舊版流程或 Invitations 被人工修改 | 更新至目前版本並核對 BindingSessions；目前只在資源與 Users 備妥後的最後受鎖階段增加 UsedCount | 取消／初始化失敗不扣次數，完成只扣 1 次 |
-| 私訊附件說未綁定 | Users disabled 或 OAuth Token 已撤銷 | 私訊 `狀態`，重新用新邀請碼綁定 | Users Enabled=true |
+| 私訊附件說尚未完成綁定 | Users 不存在，或使用者從未完成 Google 綁定 | 私訊輸入 `綁定`（或既有流程的 `綁定 <邀請碼>`） | 顯示「尚未完成 Google 帳號綁定，請私訊輸入『綁定』開始設定。」 |
+| 私訊附件說 Google 授權已失效 | Users 已存在但 OAuth Service 沒有可用 Token，或 Refresh Token 已失效／撤銷 | 私訊輸入 `重新授權`，選擇原本綁定的 Google 帳號；不要輸入 `解除綁定` | 顯示「Google 授權已失效，請私訊輸入『重新授權』重新連結 Google 帳號。既有備份資料不會被刪除。」；Users、Drive、Sheet、群組資料保留 |
 | 自助綁定後無法備份 | Users 的 `ApprovalStatus=PENDING_APPROVAL` 或 `REJECTED` | 請管理者用「待審核」取得安全化代號，再私訊 Bot 輸入「核准 <編號>」；核准前內容不會保存 | Users 為 `APPROVED` 且 `Enabled=true` |
 | `REQUIRE_ADMIN_APPROVAL=false` 仍顯示等待審核 | GAS Web App 尚未更新到支援自動核准的版本，或 Property 值含空白／拼字錯誤 | 確認 Script Property 精確為 `false`，再更新既有 Web App deployment；不要修改 Users 既有核准狀態 | 新的自助 OAuth 完成頁顯示「Google 授權完成，已啟用備份」，Users 為 APPROVED／Enabled=true |
 | `紀錄` 沒有查詢連結 | 使用者尚未綁定／啟用，或在群組內輸入 | 私訊 Bot 輸入 `紀錄`；確認 Users 已核准且 SheetId 存在。群組只能改用私訊 | 回覆 10 分鐘有效的查詢中心連結 |
@@ -38,7 +39,10 @@
 | `容量` 回覆「請先完成 Google 帳號綁定」 | Users 不存在、未核准或 Enabled=false | 私訊完成 Google OAuth，並確認管理者已核准（若啟用審核） | 可查詢自己的 Drive 與備份資料夾容量 |
 | GAS Web App 回 HTTP 403 HTML、LINE 指令無回覆 | 擁有者尚未完成 Apps Script 授權、Web App 非匿名存取或 Worker 的 GAS endpoint 不是目前啟用的 `/exec` | 每次同步並更新 Web App 後，先執行 `testOwnerAuthorizationHealth`；若出現 Review Permissions，完成授權後確認 Logger 顯示 PASS，再逐字核對 Cloudflare `GAS_ENDPOINT_URL`（不可使用 `/dev`） | GAS Executions 出現新的 `doPost`，Worker 不再記錄 `GAS_HTTP_ERROR` |
 | `容量` 回覆「Google 授權已失效」 | OAuth Service `LineUser_<lineUserHash>` 沒有可用 Token，或 Token 無法刷新 | 私訊輸入 `重新授權`，選擇原本綁定的 Google 帳號；不要輸入 `解除綁定`，也不要在 Log 或聊天貼 Token | 既有 Users、Drive、Sheet、群組資料保留，重新授權後可重新查詢 |
+| 個人或群組附件回覆「Google 授權已失效」 | 備份時 `hasAccess()` 失敗，或 Drive API 回傳 401／403 `insufficientPermissions` | 先完成重新授權，再由個人輸入 `補備份 今日`，或由群組 owner／管理者輸入 `補備份 今日`；補備份只處理 Bot 曾收到且仍有 `messageId` 的項目 | 工作會保留在 Jobs 的 `OAUTH_REAUTH_REQUIRED` 待補狀態；群組提醒同一錯誤 30 分鐘內最多一次，不會抓 LINE 歷史紀錄 |
 | `容量` 回覆「目前 Google Drive 授權不足」 | Drive `about.get` 回傳 403 `insufficientPermissions` | 私訊輸入 `重新授權` 取得新的 `drive.file` 授權；不要在 Log 或聊天貼 Token | 授權恢復後可重新查詢 |
+| OAuth Token 自動刷新測試失敗 | `TEST_LINE_USER_HASH` 格式錯誤、Users 不存在／未啟用、OAuth Service 沒有 Token，或 Refresh Token 已失效 | 確認 Script Property 只有 64 碼小寫雜湊；先執行 `testOwnerAuthorizationHealth`，再執行 `testOAuthRefreshForConfiguredUser`。若 Token 失效，讓該使用者私訊 `重新授權` | Logger 只顯示 `oauth-refresh-test` 安全欄位；重新授權不刪除 Users、Drive、Sheet 或 Groups |
+| OAuth 強制刷新測試失敗 | OAuth2 Library 不支援 `refresh()`、使用者撤銷授權或 Google Workspace 政策拒絕刷新 | 先完成 `testOwnerAuthorizationHealth`；確認 OAuth2 Library identifier 為 `OAuth2`、scope 含 `drive.file`，再偶爾執行 `testOAuthForceRefreshForConfiguredUser` | 不會 reset Token；必要時由使用者私訊 `重新授權`，再重新執行一般刷新測試 |
 | `容量` 回覆暫時無法取得 | Drive API 逾時、429、5xx 或資料夾掃描失敗 | 稍後重試；檢查安全 Log 的 `component=drive-quota`、`errorCode`、`correlationId` | 不會輸出容量 API 原始回應或檔案 ID |
 | 群組輸入 `容量` 沒有數字 | 群組禁止公開 owner 的個人容量 | 私訊 Bot 輸入 `容量`；要查群組資料夾則私訊輸入 `群組容量` | 群組只收到改用私訊的提示 |
 | `DRIVE_IDEMPOTENCY_SEARCH_FAILED` | Drive `files.list` 回傳 400／401／403／5xx、OAuth 權限不足或查詢格式錯誤 | 查看 GAS 安全 Log 的 `httpStatus`、`googleReason`、`googleDomain`、`googleMessageSummary` 與 `correlationId`；不得記錄完整 q、File ID 或 Token。確認 `drive.file` 授權與目標資料夾仍由本應用程式建立 | 200 且 `files=[]` 會建立新資料夾；非 2xx 會保留 FAILED BindingSession，可執行 `resumeAuthorizedBinding` |
@@ -59,8 +63,14 @@
 
 | 群組輸入「備份清單」格式錯誤 | 月份不在 1～12、日期格式不是支援格式，或指令在私訊使用 | 使用 `備份清單`、`今日備份清單`、`本週備份清單`、`8月備份清單` 或 `2026年8月備份清單`；摘要指令請在群組輸入 | 顯示安全格式提示，不產生查詢連結 |
 | 群組摘要查無資料 | 日期範圍沒有成功／已備份紀錄，或舊資料缺少安全群組識別 | 確認新版本已讓 Sheet 最右側出現「群組識別」；不要用 raw groupId 補欄 | 顯示「查無此期間的群組備份紀錄。」或安全舊資料提示 |
+| 群組一般成員輸入「本週備份清單」沒有回應 | 舊版摘要錯誤可能以 Queue 可重試結果結束，Worker 不會替可重試錯誤送 Reply；或查詢被誤套用個人綁定／審核條件 | 更新至目前版本；群組摘要只需群組已綁定、owner `Enabled=true` 且可讀取 owner Sheet。查看安全 `component=group-query` 記錄的 `command`、權限布林值與 `correlationId` | 所有成員都會收到摘要、未綁定提示、格式提示或暫時錯誤提示；不公開 Drive／查詢 URL |
 | `群組紀錄` 沒有連結 | 要求者不是群組 owner／管理者、群組代號錯誤，或 owner 尚未啟用 | 先私訊 `群組紀錄` 取得安全代號；owner 再輸入 `群組紀錄 YYYY-MM g_xxxxxxxx` | 只在授權範圍內產生 10 分鐘查詢連結 |
 | 群組完整查詢顯示舊紀錄識別不足 | 舊列的「群組識別」空白，且同一 owner 有同名群組或無法確認唯一性 | 只在 owner／管理者查詢 owner Sheet；確認唯一後可執行 `migrateLegacyGroupRecordHashes()`，不要手動填 raw groupId | 唯一條件成立時顯示相容提示；否則顯示「舊紀錄缺少群組識別，且群組名稱無法唯一確認，請僅查詢新版本後的群組紀錄。」 |
+
+| `補備份` 回覆「格式不正確」 | 日期不是支援的今日、ISO 日期、年月或日期區間格式 | 使用 `補備份 今日`、`補備份 2026-08` 或 `補備份 2026-08-01 至 2026-08-10`；只能處理 Bot 曾收到的訊息 | 回覆格式提示，不會直接處理歷史訊息 |
+| `補備份` 顯示沒有可補項目 | 期間沒有失敗／未完成工作、工作已完成、缺少 messageId，或 LINE Content 已不可下載 | 先查看 owner Sheet 與 Jobs 的安全狀態；不要把補備份當作 LINE 歷史查詢 | 只回報可補、略過與失敗統計；不可補項目不影響其他工作 |
+| `群組補備份` 無法建立 Queue | `WORKER_REPLAY_ENDPOINT` 未設定／不是 HTTPS，或 GAS／Worker 的 shared HMAC 不一致 | 在 GAS Script Properties 填入 `<Worker URL>/internal/replay`，核對兩端既有 `WORKER_GAS_SHARED_SECRET`，不要輸出值 | 安全錯誤碼為 `REPLAY_*`；修正後重新執行補備份 |
+| 補備份工作重複出現 | Queue 至少一次傳遞或多次手動請求 | 查看 Jobs 的 `RETRY_REQUESTED`／`COMPLETED` 與 Drive appProperties，不要依檔名刪除 | 原 webhookEventId／messageId 與 `lineBackupEventKey` 會讓已完成工作 ACK 並避免重複上傳 |
 
 每次 GAS 同步與 Web App 更新後，固定先執行 `testOwnerAuthorizationHealth`；若出現 Review Permissions，完成授權並確認 `PASS testOwnerAuthorizationHealth`，再依序測試 LINE 私訊 `說明`、群組 `說明` 與 `備份清單`。不要直接以 Queue 重送取代授權健康檢查。
 
@@ -69,3 +79,9 @@
 遇到 GAS `SIGNATURE_INVALID` 時，先確認兩端 `WORKER_GAS_SHARED_SECRET` 完全相同。若仍無法判斷，才在 Worker 與 GAS 同時暫時設定 `HMAC_DIAGNOSTIC_ENABLED=true`，執行一次受控的「說明」測試。安全 Log 只會出現固定長度的 Secret／signing input／Signature 指紋與 Script ID 尾碼，不會出現 Secret、payload、nonce、Token、GAS URL、LINE userId 或完整 Signature。完成比對後，立即將 GAS Property 與 Worker var 改回 `false` 並重新更新／部署；不要長期啟用，也不要把 Log 公開。
 
 可以提供：時間（Asia/Taipei）、元件、errorCode、截短的 correlationId、HTTP 狀態與是否可重現。不要提供：Authorization header、Channel Secret、Access／Refresh Token、OAuth Client Secret、完整 Apps Script／Worker URL、原始 LINE userId／groupId、邀請碼、訊息內容或附件。
+
+## 系統狀態與 GAS 403 fallback
+
+私訊 `系統狀態` 可在不呼叫 GAS 的情況下查看 Worker 正常、Queue 已設定與最近 GAS 呼叫狀態；`系統診斷` 會另外顯示白名單格式的最近 GAS 錯誤碼。此摘要只保存在 Worker isolate 記憶體，重啟後可能為「未知」。
+
+若 GAS 回傳 HTTP 403 且 `content-type` 為 HTML，或回傳無法解析的非 JSON `GAS_HTTP_ERROR`，Worker 會使用原始 Reply Token 顯示「系統暫時無法回應，可能是 Apps Script 需要管理者重新授權。管理者請執行 testOwnerAuthorizationHealth，完成 Google 授權後再重試。」Reply Token 失效時只記錄 `line` 安全錯誤，不會改用 Push 或重做備份。

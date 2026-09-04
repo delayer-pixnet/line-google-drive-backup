@@ -1,7 +1,7 @@
 import type { HmacDiagnostic } from "./types";
 
 export interface SafeLogEntry {
-  readonly component: "webhook" | "queue" | "gas" | "line";
+  readonly component: "webhook" | "queue" | "gas" | "line" | "replay" | "system";
   readonly status:
     | "accepted"
     | "ignored"
@@ -18,6 +18,7 @@ export interface SafeLogEntry {
   readonly httpStatus?: number;
   readonly contentType?: string;
   readonly redirected?: boolean;
+  readonly count?: number;
   readonly diagnostic?: HmacDiagnostic;
 }
 
@@ -78,6 +79,9 @@ export function safeLog(
       ? { contentType: entry.contentType }
       : {}),
     ...(entry.redirected === undefined ? {} : { redirected: entry.redirected }),
+    ...(typeof entry.count === "number" && Number.isSafeInteger(entry.count) && entry.count >= 0 && entry.count <= 100
+      ? { count: entry.count }
+      : {}),
     ...(safeDiagnostic === undefined ? {} : { diagnostic: safeDiagnostic }),
   });
   if (level === "error") {

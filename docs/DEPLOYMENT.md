@@ -16,6 +16,7 @@
 - [ ] OAuth Web Client redirect URI 是 Apps Script `/usercallback`。
 - [ ] OAuth2 Library 已加入，identifier 為 `OAuth2`。
 - [ ] GAS Properties 已逐項核對；`DELETE_DRIVE_ON_UNSEND` 初期為 `false`、`JOB_PROCESSING_LEASE_SECONDS=600`，2 個保留天數已設定；若啟用自助綁定，`ENABLE_SELF_SERVICE_BINDING=true`。`REQUIRE_ADMIN_APPROVAL=true` 表示需審核；若要自助綁定後立即啟用則設為 `false`。`ADMIN_LINE_USER_HASHES` 只填管理者雜湊。
+- [ ] 若要啟用群組補備份，已將部署後 Worker URL 加上 `/internal/replay` 填入 GAS `WORKER_REPLAY_ENDPOINT`；此值不是 Secret，但不可放入 Git 或聊天。
 - [ ] 管理 Sheet 7 個工作表初始化成功；Jobs 包含 `LeaseExpiresAt`，BindingSessions 包含恢復狀態欄位。
 - [ ] GAS Web App 以管理者執行，Anyone 可呼叫；`/exec` health 正常。
 - [ ] 每次 GAS 同步並更新 Web App 版本後，先在 Apps Script 執行 `testOwnerAuthorizationHealth`；若出現 Review Permissions，完成授權後確認 Logger 顯示 `PASS testOwnerAuthorizationHealth`。
@@ -64,6 +65,7 @@
 8. 私訊 `紀錄`、`查詢紀錄` 或群組 owner 私訊 `群組紀錄`，預期收到 10 分鐘 GAS 短查詢連結（只有 `route=q&id=短碼`）；在群組輸入同一指令只收到改用私訊的提示。若舊列缺少「群組識別」，只有名稱唯一時才會 fallback。
 9. 私訊 `容量`、`空間` 或 `Drive容量`，預期看到自己的 Drive quota 與備份資料夾估算；私訊 `群組容量`，預期只列出自己擁有的群組備份資料夾。群組輸入 `容量` 只收到改用私訊提示。
 10. 在群組傳一般聊天，預期不入 Queue／Sheet；提及 Bot 或 `#筆記` 才會保存。
+11. 由群組 owner 或管理者測試 `補備份 今日`；預期只處理 Bot 曾收到且仍可下載的失敗／未完成項目，回覆統計且不顯示 Drive URL。私訊多群組時使用 `群組補備份 YYYY-MM g_xxxxxxxx`。
 
 ## G. 完成後
 

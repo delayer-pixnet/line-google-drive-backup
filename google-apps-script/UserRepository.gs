@@ -8,9 +8,15 @@ var ADMIN_SHEET_HEADERS_ = Object.freeze({
   Users: ['LineUserHash', 'GoogleSubjectId', 'GoogleEmail', 'RootFolderId', 'PersonalFolderId', 'GroupFolderId', 'SheetId', 'Enabled', 'CreatedAt', 'UpdatedAt', 'ApprovalStatus'],
   Groups: ['GroupIdHash', 'OwnerLineUserHash', 'GroupName', 'FolderId', 'SheetId', 'Enabled', 'CreatedAt', 'UpdatedAt'],
   Invitations: ['InviteCodeHash', 'Enabled', 'MaxUses', 'UsedCount', 'ExpiresAt', 'CreatedAt'],
-  Jobs: ['WebhookEventId', 'MessageId', 'Status', 'RetryCount', 'LeaseExpiresAt', 'DriveFileId', 'ErrorCode', 'ErrorMessage', 'CreatedAt', 'UpdatedAt'],
+  Jobs: [
+    'WebhookEventId', 'MessageId', 'Status', 'RetryCount', 'LeaseExpiresAt', 'DriveFileId',
+    'ErrorCode', 'ErrorMessage', 'CreatedAt', 'UpdatedAt',
+    'MessageType', 'LineUserHash', 'GroupIdHash', 'OwnerLineUserHash', 'SourceType',
+    'OriginalFileName', 'LineMessageTime', 'SenderDisplayName', 'GroupDisplayName'
+  ],
   Nonces: ['NonceHash', 'Purpose', 'ExpiresAt', 'UsedAt'],
   BindingSessions: ['SessionNonceHash', 'LineUserHash', 'InviteCodeHash', 'ExpiresAt', 'UsedAt', 'Status', 'CreatedAt', 'UpdatedAt', 'FailureCode'],
+  ReplayRequests: ['OriginalWebhookEventId', 'OriginalMessageId', 'RetryRequestedAt', 'RetryRequestedByUserHash', 'RetryReason', 'Status', 'CreatedAt', 'UpdatedAt', 'ErrorCode'],
   Errors: ['Timestamp', 'Component', 'ErrorCode', 'SafeMessage', 'CorrelationId']
 });
 
@@ -25,6 +31,9 @@ function ensureAdminSheets_() {
     var sheet = spreadsheet.getSheetByName(sheetName) || spreadsheet.insertSheet(sheetName);
     if (sheetName === 'Users') {
       migrateUsersApprovalStatusColumn_(sheet);
+    }
+    if (sheetName === 'Jobs') {
+      migrateJobsMetadataColumns_(sheet);
     }
     var headers = ADMIN_SHEET_HEADERS_[sheetName];
     if (sheet.getLastRow() === 0) {
@@ -81,7 +90,38 @@ function getAdminSheet_(name) {
   if (name === 'Users') {
     migrateUsersApprovalStatusColumn_(sheet);
   }
+  if (name === 'Jobs') {
+    migrateJobsMetadataColumns_(sheet);
+  }
   return sheet;
+}
+
+function migrateJobsMetadataColumns_(sheet) {
+  if (!sheet || sheet.getLastRow() === 0) {
+    return;
+  }
+  var legacyHeaders = [
+    'WebhookEventId', 'MessageId', 'Status', 'RetryCount', 'LeaseExpiresAt', 'DriveFileId',
+    'ErrorCode', 'ErrorMessage', 'CreatedAt', 'UpdatedAt'
+  ];
+  var lastColumn = Math.max(sheet.getLastColumn(), legacyHeaders.length);
+  var currentHeaders = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(function (value) {
+    return String(value || '').trim();
+  });
+  var isLegacyJobsSheet = legacyHeaders.every(function (header, index) {
+    return currentHeaders[index] === header;
+  });
+  if (!isLegacyJobsSheet) {
+    return;
+  }
+  var metadataHeaders = ADMIN_SHEET_HEADERS_.Jobs.slice(legacyHeaders.length);
+  metadataHeaders.forEach(function (header, index) {
+    var column = legacyHeaders.length + index + 1;
+    if (currentHeaders[column - 1] && currentHeaders[column - 1] !== header) {
+      throw createAppError_('ADMIN_HEADERS_MISMATCH', false, '管理試算表欄位不符合版本要求。');
+    }
+    sheet.getRange(1, column).setValue(header);
+  });
 }
 
 function getSheetRecords_(sheetName) {

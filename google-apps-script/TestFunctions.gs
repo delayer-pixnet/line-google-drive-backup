@@ -110,6 +110,17 @@ function testOAuthServiceConsistency() {
   Logger.log('PASS testOAuthServiceConsistency：OAuth Service、Token 讀取路徑與既有資源重用規則一致。');
 }
 
+/** 不連線、不讀取任何實際使用者資料；驗證狀態回覆的安全格式化規則。 */
+function testOAuthStatusFormattingHelpers() {
+  var futureSeconds = Math.floor(Date.now() / 1000) + 2700;
+  var minutes = getOAuthExpiryMinutes_({ expiresAt: futureSeconds });
+  assertTest_(minutes >= 45 && minutes <= 46, 'Access Token 剩餘時間應以分鐘安全顯示。');
+  assertTest_(getOAuthExpiryMinutes_({ expiresIn: 120 }) === 2, 'expiresIn 應可轉為分鐘。');
+  assertTest_(getOAuthExpiryMinutes_({}) === null, '缺少期限 metadata 時不得虛構剩餘時間。');
+  assertTest_(typeof getOAuthTokenStatus_ === 'function', '狀態指令必須使用共用 OAuth metadata helper。');
+  Logger.log('PASS testOAuthStatusFormattingHelpers：不輸出 Token 的授權狀態格式化規則。');
+}
+
 /** 使用者設定 TEST_LINE_USER_HASH 後手動執行；只讀取 hasAccess，不輸出 Token 或識別資料。 */
 function testOAuthTokenAvailableForConfiguredUser() {
   var lineUserHash = PropertiesService.getScriptProperties().getProperty('TEST_LINE_USER_HASH') || '';
@@ -121,6 +132,270 @@ function testOAuthTokenAvailableForConfiguredUser() {
   logOAuthTokenState_(lineUserHash, hasAccess, hasAccess ? 'TEST_TOKEN_AVAILABLE' : 'TEST_TOKEN_MISSING', 'manual-oauth-test');
   assertTest_(hasAccess, '目前使用者 OAuth Token 不存在，請先完成「重新授權」。');
   Logger.log('PASS testOAuthTokenAvailableForConfiguredUser：OAuth Token 已存在且可由共用 Service 讀取。');
+}
+
+function validateOAuthRefreshTestUserHash_(value) {
+  var lineUserHash = typeof value === 'string' ? value.trim() : '';
+  if (!/^[a-f0-9]{64}$/.test(lineUserHash)) {
+    throw createAppError_('OAUTH_REFRESH_TEST_HASH_INVALID', false, '測試需要 64 碼 TEST_LINE_USER_HASH Script Property。');
+  }
+  return lineUserHash;
+}
+
+function createOAuthRefreshTestContext_(lineUserHash, user) {
+  var validatedHash = validateOAuthRefreshTestUserHash_(lineUserHash);
+  if (!user) {
+    throw createAppError_('OAUTH_REFRESH_TEST_USER_NOT_FOUND', false, '找不到指定測試使用者。');
+  }
+  var enabled = isEnabledUserValue_(user.Enabled);
+  var approvalStatus = getUserApprovalStatus_(user);
+  if (!enabled || approvalStatus !== USER_APPROVAL_STATUS_.APPROVED) {
+    throw createAppError_('OAUTH_REFRESH_TEST_USER_NOT_ENABLED', false, '指定測試使用者尚未啟用。');
+  }
+  return {
+    lineUserHash: validatedHash,
+    user: user,
+    approvalStatus: approvalStatus
+  };
+}
+
+function getConfiguredOAuthRefreshTestContext_() {
+  var configuredHash = PropertiesService.getScriptProperties().getProperty('TEST_LINE_USER_HASH') || '';
+  var lineUserHash = validateOAuthRefreshTestUserHash_(configuredHash);
+  return createOAuthRefreshTestContext_(lineUserHash, findUserByHash_(lineUserHash));
+}
+
+function createEmptyOAuthTokenTestMetadata_() {
+  return {
+    hasToken: false,
+    hasRefreshToken: false,
+    hasAccessToken: false,
+    expiresAt: null,
+    expiresIn: null,
+    refreshTokenExpiresIn: null,
+    hasAccess: false
+  };
+}
+
+function parseOAuthTokenMetadataForTest_(rawToken) {
+  var metadata = createEmptyOAuthTokenTestMetadata_();
+  if (typeof rawToken !== 'string' || rawToken.length === 0) {
+    return metadata;
+  }
+  metadata.hasToken = true;
+  try {
+    var token = JSON.parse(rawToken);
+    if (!token || typeof token !== 'object') {
+      return metadata;
+    }
+    return buildOAuthTokenMetadataFromObjectForTest_(token, metadata);
+  } catch (error) {
+    // 只保留 hasToken；解析失敗時不保存或輸出原始內容。
+  }
+  return metadata;
+}
+
+function buildOAuthTokenMetadataFromObjectForTest_(token, metadata) {
+  var result = metadata || createEmptyOAuthTokenTestMetadata_();
+  if (!token || typeof token !== 'object') {
+    return result;
+  }
+  result.hasToken = true;
+  result.hasRefreshToken = typeof token.refresh_token === 'string' && token.refresh_token.length > 0;
+  result.hasAccessToken = typeof token.access_token === 'string' && token.access_token.length > 0;
+  result.expiresAt = getSafeOAuthTokenNumber_(
+    token.expiresAt !== undefined ? token.expiresAt : token.expires_at
+  );
+  result.expiresIn = getSafeOAuthTokenNumber_(
+    token.expires_in_sec !== undefined
+      ? token.expires_in_sec
+      : token.expires_in !== undefined ? token.expires_in : token.expires
+  );
+  result.refreshTokenExpiresIn = getSafeOAuthTokenNumber_(
+    token.refreshTokenExpiresIn !== undefined
+      ? token.refreshTokenExpiresIn
+      : token.refresh_token_expires_in
+  );
+  return result;
+}
+
+function getSafeOAuthTokenNumber_(value) {
+  var number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0) {
+    return null;
+  }
+  return number;
+}
+
+function getOAuthTokenMetadataForTest_(lineUserHash, service) {
+  var validatedHash = validateOAuthRefreshTestUserHash_(lineUserHash);
+  var oauthService = service || getGoogleOAuthService_(validatedHash);
+  var metadata = createEmptyOAuthTokenTestMetadata_();
+  try {
+    // OAuth2 Library 43 將 Token 保存在 oauth2.<serviceName> storage；透過正式 Service 讀取，
+    // 避免硬編碼 Library storage key，也不會把 Token 值放入 Logger。
+    var token = typeof oauthService.getToken === 'function' ? oauthService.getToken() : null;
+    return buildOAuthTokenMetadataFromObjectForTest_(token, metadata);
+  } catch (error) {
+    return metadata;
+  }
+}
+
+function buildOAuthRefreshTestSafeLog_(lineUserHash, metadata, correlationId, errorCode, error) {
+  var safeMetadata = metadata || createEmptyOAuthTokenTestMetadata_();
+  var entry = {
+    component: 'oauth-refresh-test',
+    errorCode: String(errorCode || 'OAUTH_REFRESH_TEST_FAILED').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80),
+    userHashPrefix: typeof lineUserHash === 'string' && /^[a-f0-9]{64}$/.test(lineUserHash)
+      ? lineUserHash.slice(0, 8)
+      : '',
+    hasToken: safeMetadata.hasToken === true,
+    hasRefreshToken: safeMetadata.hasRefreshToken === true,
+    hasAccessToken: safeMetadata.hasAccessToken === true,
+    hasAccess: safeMetadata.hasAccess === true,
+    correlationId: String(correlationId || 'manual-oauth-refresh-test').slice(0, 100)
+  };
+  ['expiresAt', 'expiresIn', 'refreshTokenExpiresIn'].forEach(function (name) {
+    if (safeMetadata[name] !== null && safeMetadata[name] !== undefined) {
+      entry[name] = safeMetadata[name];
+    }
+  });
+  if (error && typeof error.googleReason === 'string') {
+    entry.googleReason = error.googleReason.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 80);
+  }
+  if (error && Number.isSafeInteger(error.httpStatus)) {
+    entry.httpStatus = error.httpStatus;
+  }
+  return entry;
+}
+
+function logOAuthRefreshTestState_(lineUserHash, metadata, correlationId, errorCode, error) {
+  Logger.log(JSON.stringify(buildOAuthRefreshTestSafeLog_(
+    lineUserHash,
+    metadata,
+    correlationId,
+    errorCode,
+    error
+  )));
+}
+
+function runDriveAboutForOAuthRefreshTest_(accessToken) {
+  if (typeof accessToken !== 'string' || accessToken.length === 0) {
+    throw createAppError_('OAUTH_REFRESH_TEST_ACCESS_TOKEN_EMPTY', false, '無法取得測試用授權。');
+  }
+  // 沿用正式容量查詢的 about.get helper；此函式不輸出 access token 或回應內容。
+  return getDriveQuota_(accessToken);
+}
+
+function testOAuthRefreshForConfiguredUser() {
+  var lineUserHash = '';
+  var metadata = createEmptyOAuthTokenTestMetadata_();
+  var correlationId = 'manual-oauth-refresh-test';
+  try {
+    var context = getConfiguredOAuthRefreshTestContext_();
+    lineUserHash = context.lineUserHash;
+    var service = getGoogleOAuthService_(lineUserHash);
+    metadata = getOAuthTokenMetadataForTest_(lineUserHash, service);
+    metadata.hasAccess = service.hasAccess();
+    logOAuthRefreshTestState_(lineUserHash, metadata, correlationId, 'TOKEN_STATE');
+    assertTest_(metadata.hasAccess, 'OAuth Service 目前沒有可用授權，請先輸入「重新授權」。');
+    var accessToken = service.getAccessToken();
+    metadata.hasAccessToken = typeof accessToken === 'string' && accessToken.length > 0;
+    assertTest_(metadata.hasAccessToken, 'OAuth Service 未回傳可用 Access Token。');
+    runDriveAboutForOAuthRefreshTest_(accessToken);
+    Logger.log('PASS testOAuthRefreshForConfiguredUser');
+  } catch (error) {
+    var errorCode = isAppError_(error) ? error.appCode : 'OAUTH_REFRESH_TEST_FAILED';
+    logOAuthRefreshTestState_(lineUserHash, metadata, correlationId, errorCode, error);
+    Logger.log('FAIL testOAuthRefreshForConfiguredUser：' + errorCode);
+    throw error;
+  }
+}
+
+function refreshOAuthServiceForTest_(service) {
+  if (!service || typeof service.refresh !== 'function') {
+    throw createAppError_('OAUTH_REFRESH_UNSUPPORTED', false, '目前 OAuth2 Library 不支援手動刷新。');
+  }
+  service.refresh();
+}
+
+function testOAuthForceRefreshForConfiguredUser() {
+  var lineUserHash = '';
+  var metadata = createEmptyOAuthTokenTestMetadata_();
+  var correlationId = 'manual-oauth-force-refresh-test';
+  try {
+    var context = getConfiguredOAuthRefreshTestContext_();
+    lineUserHash = context.lineUserHash;
+    var service = getGoogleOAuthService_(lineUserHash);
+    metadata = getOAuthTokenMetadataForTest_(lineUserHash, service);
+    refreshOAuthServiceForTest_(service);
+    metadata = getOAuthTokenMetadataForTest_(lineUserHash, service);
+    metadata.hasAccess = service.hasAccess();
+    logOAuthRefreshTestState_(lineUserHash, metadata, correlationId, 'TOKEN_REFRESHED');
+    assertTest_(metadata.hasAccess, 'OAuth Service 刷新後沒有可用授權。');
+    var accessToken = service.getAccessToken();
+    metadata.hasAccessToken = typeof accessToken === 'string' && accessToken.length > 0;
+    assertTest_(metadata.hasAccessToken, 'OAuth Service 刷新後未回傳 Access Token。');
+    runDriveAboutForOAuthRefreshTest_(accessToken);
+    Logger.log('PASS testOAuthForceRefreshForConfiguredUser');
+  } catch (error) {
+    var errorCode = isAppError_(error) ? error.appCode : 'OAUTH_FORCE_REFRESH_TEST_FAILED';
+    logOAuthRefreshTestState_(lineUserHash, metadata, correlationId, errorCode, error);
+    Logger.log('FAIL testOAuthForceRefreshForConfiguredUser：' + errorCode);
+    throw error;
+  }
+}
+
+function testOAuthRefreshSafetyHelpers() {
+  var fakeHash = 'a'.repeat(64);
+  var invalidHashError = null;
+  try {
+    validateOAuthRefreshTestUserHash_('not-a-hash');
+  } catch (error) {
+    invalidHashError = error;
+  }
+  assertTest_(isAppError_(invalidHashError) && invalidHashError.appCode === 'OAUTH_REFRESH_TEST_HASH_INVALID',
+    'TEST_LINE_USER_HASH 格式錯誤應安全失敗。');
+  var missingUserError = null;
+  try {
+    createOAuthRefreshTestContext_(fakeHash, null);
+  } catch (error) {
+    missingUserError = error;
+  }
+  assertTest_(isAppError_(missingUserError) && missingUserError.appCode === 'OAUTH_REFRESH_TEST_USER_NOT_FOUND',
+    '指定使用者不存在時應安全失敗。');
+  var disabledUserError = null;
+  try {
+    createOAuthRefreshTestContext_(fakeHash, { Enabled: false, ApprovalStatus: USER_APPROVAL_STATUS_.APPROVED });
+  } catch (error) {
+    disabledUserError = error;
+  }
+  assertTest_(isAppError_(disabledUserError) && disabledUserError.appCode === 'OAUTH_REFRESH_TEST_USER_NOT_ENABLED',
+    '未啟用使用者應安全失敗。');
+  var metadata = parseOAuthTokenMetadataForTest_(JSON.stringify({
+    access_token: 'TEST_ACCESS_TOKEN',
+    refresh_token: 'TEST_REFRESH_TOKEN',
+    expires_at: 1234567890,
+    expires_in: 3600,
+    refresh_token_expires_in: 86400
+  }));
+  assertTest_(metadata.hasToken && metadata.hasAccessToken && metadata.hasRefreshToken,
+    'Token metadata 應只辨識存在狀態。');
+  var safeLog = JSON.stringify(buildOAuthRefreshTestSafeLog_(fakeHash, metadata, 'test', 'TEST', null));
+  assertTest_(safeLog.indexOf('TEST_ACCESS_TOKEN') < 0 && safeLog.indexOf('TEST_REFRESH_TOKEN') < 0,
+    '安全記錄不得包含 Token 值。');
+  var failureLog = JSON.stringify(buildOAuthRefreshTestSafeLog_(
+    fakeHash,
+    metadata,
+    'test-failure',
+    'OAUTH_TOKEN_REFRESH_FAILED',
+    { googleReason: 'invalid_grant', httpStatus: 401 }
+  ));
+  assertTest_(failureLog.indexOf('invalid_grant') >= 0 && failureLog.indexOf('401') >= 0,
+    'Token 失敗摘要應保留安全的 Google reason 與 HTTP status。');
+  assertTest_(failureLog.indexOf('TEST_ACCESS_TOKEN') < 0 && failureLog.indexOf('TEST_REFRESH_TOKEN') < 0,
+    'Token 失敗摘要不得包含 Token 值。');
+  Logger.log('PASS testOAuthRefreshSafetyHelpers：格式、使用者狀態、Token metadata 與安全記錄。');
 }
 
 function testHmacVerification() {
@@ -1022,20 +1297,40 @@ function testGroupBackupQueryHelpers() {
   assertTest_(parseGroupSummaryQuery_('2026年8月備份清單', now).label === '2026/08', '年月份查詢解析失敗。');
   assertTest_(parseGroupSummaryQuery_('2026-08 備份清單', now).label === '2026/08', 'ISO 年月份查詢解析失敗。');
   assertTest_(parseGroupSummaryQuery_('13月備份清單', now) === null, '無效月份應拒絕。');
+  assertTest_(getGroupSummaryCommandLabel_('本週備份清單') === 'weekly-summary', '本週摘要安全指令名稱不正確。');
+  assertTest_(canUseGroupSummary_({ Enabled: true }, { Enabled: true, SheetId: 'sheet-id' }), '群組摘要應只依群組與 owner 資源狀態允許。');
+  assertTest_(canUseGroupSummary_({ Enabled: true }, { Enabled: false, SheetId: 'sheet-id' }) === false, '停用 owner 不應提供群組摘要。');
   assertTest_(getGroupQuerySafeCode_('abcdef1234567890') === 'g_abcdef12', '群組安全代號格式不正確。');
   var safeSummary = formatGroupSummaryReply_({ GroupName: '測試群組' }, currentMonth, {
     records: [{
       'LINE 訊息時間': '2026-08-18 10:00:00',
-      '訊息類型': 'file',
-      '原始檔名': '文件.pdf',
+      '訊息類型': 'image',
+      '原始檔名': '',
+      '傳送者名稱': '王小明',
+      messageId: 'summary-message-001',
       '狀態': '完成'
     }],
-    counts: { image: 0, video: 0, audio: 0, file: 1, note: 0, text: 0 },
+    counts: { image: 1, video: 0, audio: 0, file: 0, note: 0, text: 0 },
     legacyFallback: false
   });
   assertTest_(safeSummary.indexOf('drive.google.com') < 0, '群組摘要不可顯示 Drive 連結。');
   assertTest_(safeSummary.indexOf('webhook') < 0, '群組摘要不可顯示工作識別。');
   assertTest_(safeSummary.indexOf('最新 1 筆') >= 0, '群組摘要應限制並顯示最新紀錄數量。');
+  assertTest_(/08\/18 10:00 圖片：王小明 image_20260818_100000_[a-f0-9]{8}\.jpg/u.test(safeSummary), '圖片摘要應顯示時間、傳送者與穩定可讀檔名。');
+  assertTest_(safeSummary.indexOf('summary-message-001') < 0, '圖片摘要不可顯示原始 messageId。');
+  var formulaSafeSummary = formatGroupSummaryReply_({ GroupName: '測試群組' }, currentMonth, {
+    records: [{
+      'LINE 訊息時間': '2026-08-18 10:01:00',
+      '訊息類型': 'image',
+      '原始檔名': '',
+      '傳送者名稱': '=危險名稱',
+      messageId: 'summary-message-002',
+      '狀態': '完成'
+    }],
+    counts: { image: 1, video: 0, audio: 0, file: 0, note: 0, text: 0 },
+    legacyFallback: false
+  });
+  assertTest_(formulaSafeSummary.indexOf('=危險名稱') < 0, '摘要顯示名稱不得保留公式注入前綴。');
   Logger.log('PASS testGroupBackupQueryHelpers：群組日期解析、摘要與安全代號。');
 }
 
@@ -1131,18 +1426,66 @@ function testDriveQuotaUserBindingCompatibility() {
   assertTest_(isApprovedEnabledUser_(approvedUser), 'APPROVED 且 Enabled=true 應可查詢容量。');
   assertTest_(!isApprovedEnabledUser_(pendingUser), 'PENDING_APPROVAL 使用者不可查詢容量。');
   assertTest_(!isApprovedEnabledUser_(disabledUser), 'Enabled=false 使用者不可查詢容量。');
+  var unboundError = null;
+  try {
+    getDriveQuotaAccessToken_('a'.repeat(64), { hasUser: false }, 'test-unbound');
+  } catch (error) {
+    unboundError = error;
+  }
+  assertTest_(isAppError_(unboundError) && unboundError.appCode === 'OAUTH_NOT_BOUND',
+    '沒有 Users 記錄時容量查詢應辨識為未綁定。');
+  assertTest_(unboundError.safeMessage === getOAuthNotBoundMessage_(),
+    '沒有 Users 記錄時應顯示綁定提示，不得誤稱授權失效。');
   assertTest_(getDriveQuotaUserMessage_({ appCode: 'DRIVE_QUOTA_USER_NOT_ENABLED' }) ===
     '請先完成 Google 帳號綁定後再查詢容量。', '未綁定或未啟用應顯示綁定提示。');
   assertTest_(getDriveQuotaUserMessage_({ appCode: 'OAUTH_TOKEN_MISSING' }) ===
-    'Google 授權已失效，請重新輸入「綁定」完成授權。', 'OAuth Token 不存在應顯示授權失效提示。');
+    getOAuthTokenExpiredMessage_(), 'OAuth Token 不存在應顯示重新授權提示。');
   assertTest_(getDriveQuotaUserMessage_({ appCode: 'OAUTH_TOKEN_READ_FAILED' }) ===
-    'Google 授權已失效，請重新輸入「綁定」完成授權。', 'OAuth Token 讀取失敗應顯示授權失效提示。');
+    getOAuthTokenExpiredMessage_(), 'OAuth Token 讀取失敗應顯示重新授權提示。');
+  assertTest_(getDriveQuotaUserMessage_({ appCode: 'OAUTH_NOT_BOUND' }) ===
+    getOAuthNotBoundMessage_(), '未綁定應顯示綁定提示，不得誤稱授權失效。');
   assertTest_(getDriveQuotaUserMessage_({
     httpStatus: 403,
     googleReason: 'insufficientPermissions'
   }) === '目前 Google Drive 授權不足，請重新輸入「綁定」完成授權。',
   'Drive 403 insufficientPermissions 應顯示授權不足提示。');
   Logger.log('PASS testDriveQuotaUserBindingCompatibility：舊版、核准、待審核與授權失效分流。');
+}
+
+function testOAuthTokenFailureMessages() {
+  var unboundMessage = getOAuthNotBoundMessage_();
+  var expiredMessage = getOAuthTokenExpiredMessage_();
+  assertTest_(unboundMessage.indexOf('尚未完成 Google 帳號綁定') >= 0, '未綁定訊息應引導使用者輸入綁定。');
+  assertTest_(unboundMessage.indexOf('重新授權') < 0, '未綁定訊息不得誤導成重新授權。');
+  assertTest_(expiredMessage.indexOf('Google 授權已失效') >= 0, 'Token 失效訊息應明確說明授權失效。');
+  assertTest_(expiredMessage.indexOf('重新授權') >= 0, 'Token 失效訊息應引導使用者重新授權。');
+  assertTest_(expiredMessage.indexOf('既有備份資料不會被刪除') >= 0, 'Token 失效訊息應說明資料不會刪除。');
+  assertTest_(getOAuthServiceName_('a'.repeat(64)) === 'LineUser_' + 'a'.repeat(64), '重新授權應沿用既有 OAuth Service。');
+  Logger.log('PASS testOAuthTokenFailureMessages：未綁定與 Token 失效訊息分離。');
+}
+
+/** 管理者手動執行；只列設定是否存在與文件／操作提醒，不輸出任何 Secret 值。 */
+function testOAuthProductionReadinessChecklist() {
+  var properties = PropertiesService.getScriptProperties();
+  var clientIdConfigured = Boolean(String(properties.getProperty(APP_CONFIG_KEYS_.GOOGLE_OAUTH_CLIENT_ID) || '').trim());
+  var clientSecretConfigured = Boolean(String(properties.getProperty(APP_CONFIG_KEYS_.GOOGLE_OAUTH_CLIENT_SECRET) || '').trim());
+  var scopes = getGoogleUserOAuthScopeString_().split(/\s+/).filter(function (scope) { return scope; });
+  var hasDriveFileScope = scopes.indexOf('https://www.googleapis.com/auth/drive.file') >= 0;
+  var hasNoFullDriveScope = scopes.indexOf('https://www.googleapis.com/auth/drive') < 0;
+  var hasReauthorizationCommand = typeof createReauthorizationReply_ === 'function';
+  assertTest_(hasDriveFileScope && hasNoFullDriveScope, '使用者 OAuth scope 必須保留 drive.file 且不得加入完整 drive。');
+  assertTest_(hasReauthorizationCommand, '必須保留重新授權指令。');
+  Logger.log('OAuth Production 發布準備檢查：');
+  Logger.log('GOOGLE_OAUTH_CLIENT_ID 已設定：' + (clientIdConfigured ? '是' : '否'));
+  Logger.log('GOOGLE_OAUTH_CLIENT_SECRET 已設定：' + (clientSecretConfigured ? '是（不顯示值）' : '否'));
+  Logger.log('使用者 OAuth scope 包含 drive.file：' + (hasDriveFileScope ? '是' : '否'));
+  Logger.log('使用者 OAuth scope 未包含完整 drive：' + (hasNoFullDriveScope ? '是' : '否'));
+  Logger.log('已保留「重新授權」指令：' + (hasReauthorizationCommand ? '是' : '否'));
+  Logger.log('Production 發布說明文件：已建立，請參閱 docs/GOOGLE_APPS_SCRIPT_SETUP.md 與 docs/GOOGLE_CLOUD_SETUP.md。');
+  Logger.log('請管理者到 Google Auth Platform 確認 Publishing status = Production。');
+  Logger.log('切換 Production 後，既有已失效使用者仍需私訊輸入「重新授權」一次取得新 Token。');
+  Logger.log('重新授權只更新 OAuth Token，不刪除 Users、Drive、Sheet 或群組資料。');
+  Logger.log('PASS testOAuthProductionReadinessChecklist');
 }
 
 function testAdminApprovalSafetyHelpers() {
@@ -1218,6 +1561,11 @@ function testGroupPermissionHelpers() {
   assertTest_(
     getGroupCommandRestrictionMessage_('groupRecords') === '群組完整紀錄請私訊 Bot 執行。',
     '群組完整紀錄不可在群組內公開。'
+  );
+  assertTest_(getGroupCommandRestrictionMessage_('groupReplay') === null, '群組 owner／管理者補備份應保留給權限檢查。');
+  assertTest_(
+    getGroupCommandRestrictionMessage_('manualGroupReplay') === '群組補備份請私訊 Bot 執行。',
+    '私訊群組補備份不可在群組內執行。'
   );
   assertTest_(getGroupStatusMessage_(group) === '此群組已綁定', '群組狀態只應顯示綁定狀態。');
   assertTest_(getGroupStatusMessage_(null) === '此群組尚未綁定', '未綁定群組狀態應安全顯示。');
@@ -1314,6 +1662,121 @@ function testBindingProvisioningReusesResources() {
   var second = ensureUserResources_(testUser.accessToken, testUser.lineUserHash, null);
   assertTest_(JSON.stringify(first) === JSON.stringify(second), '相同使用者重試必須重用同一組資料夾與 Sheet。');
   console.log('綁定資源冪等重用測試通過。');
+}
+
+function testManualReplayHelpers() {
+  var fixedNow = buildTaipeiDateMilliseconds_(2026, 8, 6) + 12 * 60 * 60 * 1000;
+  var today = parseManualReplayDateRange_('今日', fixedNow);
+  assertTest_(today && today.startDate === '2026-08-06', '今日應依台灣時區產生日期範圍。');
+  var month = parseManualReplayDateRange_('2026-08', fixedNow);
+  assertTest_(month && month.startDate === '2026-08-01' && month.endDate === '2026-08-31', '月份格式應產生完整月份範圍。');
+  var period = parseManualReplayDateRange_('2026-08-01 至 2026-08-10', fixedNow);
+  assertTest_(period && period.endDate === '2026-08-10', '日期區間應包含結束日。');
+  var parsed = parseManualReplayQuery_({
+    command: 'manualGroupReplay',
+    rawText: '群組補備份 2026-08 g_abcdef12'
+  });
+  assertTest_(parsed.safeCode === 'g_abcdef12' && parsed.query.startDate === '2026-08-01', '私訊群組補備份應解析月份與安全群組代號。');
+  var defaultPrivateQuery = parseManualReplayQuery_({ command: 'manualGroupReplay', rawText: '群組補備份' });
+  assertTest_(defaultPrivateQuery.query && defaultPrivateQuery.query.startDate, '私訊不帶日期時應預設本月範圍。');
+  assertTest_(normalizeReplayMessageType_('圖片') === 'image', '中文訊息類型應可轉換為 Queue 類型。');
+  assertTest_(normalizeReplayDriveFileId_('file-id_123') === 'file-id_123', '既有合法 Drive File ID 應可沿用。');
+  assertTest_(normalizeReplayDriveFileId_('file/id') === '', '不合法 Drive File ID 不可寫入補備份 Job。');
+  assertTest_(!isReplayJobStatusEligible_({ Status: 'COMPLETED' }), '已完成工作不可列為補備份候選。');
+  assertTest_(isReplayJobStatusEligible_({ Status: 'FAILED' }), '失敗工作應可列為補備份候選。');
+  assertTest_(isReplayJobStatusEligible_({ Status: 'PROCESSING', LeaseExpiresAt: new Date(Date.now() - 1000) }), '過期處理租約應可重新列為候選。');
+
+  var senderHash = 'a'.repeat(64);
+  var groupHash = 'b'.repeat(64);
+  var queueJob = buildReplayQueueJob_({
+    '群組識別': groupHash,
+    '群組名稱': '測試群組',
+    '傳送者識別': senderHash,
+    '傳送者名稱': '測試使用者',
+    '訊息類型': '圖片',
+    '原始檔名': '',
+    '文字內容': '',
+    'LINE 訊息時間': '2026-08-01 12:00:00',
+    'webhookEventId': 'evt-replay-test',
+    'messageId': 'msg-replay-test'
+  }, { GroupIdHash: groupHash, GroupName: '測試群組' }, null, groupHash);
+  assertTest_(queueJob && queueJob.replyToken === null && queueJob.groupIdHash === groupHash, '補備份工作應沿用安全識別與不使用 Reply Token。');
+  assertTest_(JSON.stringify(queueJob).indexOf('U') < 0, '補備份 Queue 工作不可包含 raw LINE userId。');
+  Logger.log('PASS testManualReplayHelpers：日期解析、候選狀態與安全 Queue 工作。');
+}
+
+function testOAuthReauthHandlingHelpers() {
+  var privateHash = 'a'.repeat(64);
+  // 每次使用新的測試群組雜湊，避免 CacheService 內既有 30 分鐘冷卻資料影響測試。
+  var groupHash = hashIdentifier_('OAUTH_REAUTH_TEST_GROUP:' + Utilities.getUuid());
+  var privateJob = {
+    webhookEventId: 'evt-oauth-recovery-test',
+    messageId: 'msg-oauth-recovery-test',
+    messageType: 'file',
+    lineUserHash: privateHash,
+    groupIdHash: null,
+    senderDisplayName: '測試使用者',
+    groupDisplayName: null,
+    fileName: '測試.pdf',
+    timestamp: Date.now()
+  };
+  var privateResult = createOAuthReauthResult_(
+    privateJob,
+    { ownerHash: privateHash },
+    createAppError_('OAUTH_TOKEN_MISSING', false, '測試授權失效。')
+  );
+  assertTest_(privateResult.jobStatus === OAUTH_REAUTH_STATUS_, '個人授權失效應保留待補 Job 狀態。');
+  assertTest_(privateResult.replyMessage.indexOf('重新授權') >= 0, '個人授權失效應回覆重新授權提示。');
+  assertTest_(JSON.stringify(privateResult).indexOf(privateHash) < 0, '個人授權失效回應不得包含完整使用者雜湊。');
+
+  var groupJob = Object.assign({}, privateJob, {
+    webhookEventId: 'evt-group-oauth-recovery-test',
+    messageId: 'msg-group-oauth-recovery-test',
+    groupIdHash: groupHash
+  });
+  var groupResult = createOAuthReauthResult_(
+    groupJob,
+    { ownerHash: privateHash },
+    createAppError_('DRIVE_API_ERROR', false, '測試授權失效。')
+  );
+  assertTest_(groupResult.replyMessage.indexOf('群組備份擁有者') >= 0, '群組 owner 授權失效應提示 owner 重新授權。');
+  assertTest_(JSON.stringify(groupResult).indexOf(groupHash) < 0, '群組授權失效回應不得包含完整群組雜湊。');
+  assertTest_(isOAuthReauthFailure_(createAppError_('OAUTH_TOKEN_READ_FAILED', false, '測試失效。')), 'OAuth Token 讀取失敗應視為需重新授權。');
+  var driveUnauthorized = createAppError_('DRIVE_UPLOAD_FAILED', false, '測試失效。');
+  driveUnauthorized.httpStatus = 401;
+  assertTest_(isOAuthReauthFailure_(driveUnauthorized), 'Drive 401 應視為需重新授權。');
+  var insufficientPermission = createAppError_('DRIVE_UPLOAD_FAILED', false, '測試失效。');
+  insufficientPermission.httpStatus = 403;
+  insufficientPermission.googleReason = 'insufficientPermissions';
+  assertTest_(isOAuthReauthFailure_(insufficientPermission), 'Drive 403 insufficientPermissions 應視為需重新授權。');
+
+  var firstReminder = getOAuthReauthReply_(groupJob, 'GROUP_OWNER_OAUTH_REAUTH_REQUIRED');
+  var secondReminder = getOAuthReauthReply_(groupJob, 'GROUP_OWNER_OAUTH_REAUTH_REQUIRED');
+  assertTest_(firstReminder && secondReminder === null, '群組授權失效提醒應有 30 分鐘冷卻。');
+
+  ['OAUTH_REAUTH_REQUIRED', 'RETRY_REQUESTED_PENDING_REAUTH', 'FAILED', 'PENDING', 'PROCESSING_TIMEOUT', 'RETRYABLE']
+    .forEach(function (status) {
+      assertTest_(isReplayJobStatusEligible_({ Status: status }), status + ' 應可進入補備份候選。');
+    });
+  assertTest_(isReplayJobStatusEligible_({ Status: 'COMPLETED' }) === false, 'COMPLETED 不得重複補備份。');
+  var replayFileJob = buildReplayQueueJobFromJobRecord_({
+    WebhookEventId: 'evt-replay-file-test',
+    MessageId: 'msg-replay-file-test',
+    Status: 'OAUTH_REAUTH_REQUIRED',
+    MessageType: 'file',
+    LineUserHash: privateHash,
+    GroupIdHash: '',
+    OwnerLineUserHash: privateHash,
+    SourceType: 'private',
+    OriginalFileName: '測試.txt',
+    LineMessageTime: new Date(),
+    SenderDisplayName: '測試使用者',
+    GroupDisplayName: '',
+    DriveFileId: ''
+  }, null);
+  assertTest_(replayFileJob && replayFileJob.groupIdHash === null, '個人補備份工作不得強制加入群組識別。');
+  assertTest_(buildReplayQueueJobFromJobRecord_({ MessageType: 'text' }, null) === null, '未保存原文的文字工作應安全略過。');
+  Logger.log('PASS testOAuthReauthHandlingHelpers：授權失效提示、Job 狀態、冷卻與補備份候選。');
 }
 
 /** 部署前先執行一次。 */

@@ -11,6 +11,8 @@
 7. GAS 使用 Script Properties 中該使用者獨立 OAuth Service 取得 Access Token。
 8. GAS 建立年月／類型資料夾，並用 webhookEventId 的用途隔離 HMAC 產生 `lineBackupEventKey`；先在目標資料夾查詢相同 Drive appProperty。
 
+若使用者或群組 owner 的 OAuth Service `hasAccess()` 失敗，或 Google Drive／Sheets 回傳 401／403 `insufficientPermissions`，GAS 不會丟棄這個工作。Jobs 會保存安全 metadata，並以 `ErrorCode` 保存受限的 retry reason 後改為 `OAUTH_REAUTH_REQUIRED`；個人以 Reply API 提醒重新授權；群組提醒 owner，且相同 `groupIdHash + errorCode` 30 分鐘內只提醒一次。重新授權成功後，使用者可執行 `補備份 今日`，只重送 Jobs 中仍有 messageId 且 LINE Content 可下載的附件。
+
 ## 群組備份清單
 
 1. Worker 將群組文字查詢指令轉為 `groupSummary` 或 `groupRecords`，Queue 只傳送 `groupIdHash`、`lineUserHash`、清理後文字與必要的 display name。
@@ -73,4 +75,16 @@ Worker 的 55 秒 timeout 不表示 GAS 已停止。若 timeout 後原 GAS 仍�
 | OAuth Token | 不保存 | 不保存 | 每位使用者獨立 Service | 不適用 |
 | 綁定 Token／OAuth state | 不保存 | BindingSessions 只存 HMAC 雜湊 | OAuth2 Library 短暫處理 | 不保存 |
 | Secret | Cloudflare Secret | 不保存 | GAS Script Properties | 不保存 |
+| 授權失效待補 metadata | 不保存 | Jobs 保存安全 hash、型別、檔名、時間與清理後名稱 | 不保存 | 重新授權後寫入使用者 Sheet |
 | webhookEventId／messageId | 短暫 | Jobs 去重 | 不保存 | 備份紀錄 |
+
+## 群組補備份
+
+1. Worker 將 `補備份`／`群組補備份` 指令與日期文字排入 Queue；不在 Reply 流程直接下載大量附件。
+2. GAS 驗證群組 owner／管理者權限，再從 owner 自己的備份 Sheet 與 Jobs 以 `groupIdHash`、日期區間及狀態篩選，只納入曾收到 webhook 且仍有 messageId 的失敗／未完成工作。
+3. GAS 在 Script Lock 下將候選 Jobs 標為 `RETRY_REQUESTED`，保存安全稽核資料，再以 `WORKER_REPLAY_ENDPOINT` 對 Worker 送出 HMAC envelope。
+4. Worker 驗證 envelope 後分批送入主 Queue。後續沿用一般 GAS claim、租約、LINE Content API、Drive appProperties 與 Sheet 寫入流程；原工作若已完成會被去重並 ACK。
+5. 缺少 messageId、LINE Content API 已不可取得、已完成／明確拒絕或群組無法唯一對應的紀錄會略過並回報統計。此功能不會抓取 LINE 歷史紀錄，也不會在群組回覆 Drive URL。
+6. 私訊 `補備份 今日` 也可補回自己的私人附件；文字／`#筆記` 若當時尚未成功寫入使用者 Sheet，管理 Jobs 不保存原文，會安全略過。
+
+私訊 `系統狀態`／`系統診斷` 會在 Queue consumer 的 Worker 分支直接使用記憶體中的最近 GAS 健康摘要，不呼叫 GAS；GAS 回 HTTP 403 HTML 或無 JSON 時，Worker 會以原始 Reply Token 回覆授權健康檢查提示，之後依錯誤可重試性處理 Queue，不會因 Reply 失敗重做備份。

@@ -153,6 +153,34 @@ describe("LINE Webhook", () => {
     expect(sentJobs.map((job) => job.webhookEventId)).toEqual(["evt-mention"]);
   });
 
+  it("群組成員輸入各種備份清單摘要指令都會建立可回覆工作", async () => {
+    const sentJobs: QueueJob[] = [];
+    const commands = [
+      "備份清單",
+      "今日備份清單",
+      "本週備份清單",
+      "8月備份清單",
+      "2026年8月備份清單",
+      "2026-08 備份清單",
+    ];
+    const body = JSON.stringify({
+      events: commands.map((text, index) => ({
+        type: "message",
+        webhookEventId: `evt-group-summary-${String(index)}`,
+        timestamp: 1_785_456_000_000,
+        replyToken: "reply-token",
+        source: { type: "group", groupId: "C-summary", userId: "U-member" },
+        message: { type: "text", id: `msg-group-summary-${String(index)}`, text },
+      })),
+    });
+
+    const response = await handleRequest(await signedRequest(body), createEnv(sentJobs));
+
+    expect(response.status).toBe(200);
+    expect(sentJobs).toHaveLength(commands.length);
+    expect(sentJobs.every((job) => job.command === "groupSummary" && !job.shouldSave)).toBe(true);
+  });
+
   it("群組 #筆記 與附件都會建立工作，附件不含二進位內容", async () => {
     const sentJobs: QueueJob[] = [];
     const baseEvent = {

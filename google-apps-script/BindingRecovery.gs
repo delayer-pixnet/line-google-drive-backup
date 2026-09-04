@@ -6,7 +6,7 @@ function provisionAuthorizedBinding_(lineUserHash, session) {
   try {
     var service = getGoogleOAuthService_(lineUserHash);
     if (!service.hasAccess()) {
-      throw createAppError_('OAUTH_NOT_BOUND', false, 'Google 授權已失效，請重新綁定。');
+      throw createAppError_('OAUTH_NOT_BOUND', false, getOAuthTokenExpiredMessage_());
     }
     var accessToken = service.getAccessToken();
     var profile = getGoogleUserProfile_(accessToken);

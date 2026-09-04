@@ -31,6 +31,7 @@
 | `ADMIN_SPREADSHEET_ID` | 管理 Sheet ID，只填 ID，不填整個 URL | 敏感設定 | 否 | 找不到或無權開啟管理 Sheet |
 | `MAX_FILE_SIZE_BYTES` | 十進位 bytes，預設 `20971520`（20 MiB），不可超過 `51380224` | 否 | 範例可、正式值不可 | 附件全被拒絕或顯示設定無效；45 MiB 屬高風險且不保證成功 |
 | `APP_BASE_URL` | 已部署 GAS Web App 的完整 `/exec` URL，不加 query string | 敏感設定 | 否 | LINE 綁定連結無法開啟 |
+| `WORKER_REPLAY_ENDPOINT` | 已部署 Worker URL 加上 `/internal/replay`，例如 `https://<Worker>/internal/replay`；不得含 query string | 否（但屬內部端點設定） | 否 | `群組補備份` 只能建立候選紀錄，無法送入 Queue |
 | `DELETE_DRIVE_ON_UNSEND` | `false` 或 `true`，建議先用 `false` | 否 | 範例可、正式設定不提交 | 設為其他值會視為不刪除 |
 | `ERROR_RETENTION_DAYS` | 正整數天數，預設 `30`，允許 1 至 3650 | 否 | 範例可、正式設定不提交 | 未設定時用 30 天；格式無效時清理函式拒絕執行 |
 | `COMPLETED_JOB_RETENTION_DAYS` | 正整數天數，預設 `90`，允許 1 至 3650 | 否 | 範例可、正式設定不提交 | 未設定時用 90 天；格式無效時清理函式拒絕執行 |
@@ -39,6 +40,7 @@
 | `ADMIN_LINE_USER_HASHES` | 逗號分隔的 64 位小寫 `lineUserHash`；只填管理者，不填原始 LINE userId | 敏感設定 | 否 | 格式錯誤時管理者指令會被拒絕 |
 | `ENABLE_SELF_SERVICE_BINDING` | `true` 或 `false`；`true` 允許私訊輸入「綁定」直接取得 OAuth 連結 | 否 | 範例可、正式設定不提交 | `false` 時仍只能使用「綁定 <邀請碼>」 |
 | `REQUIRE_ADMIN_APPROVAL` | `true` 時自助 OAuth 完成後先建立 `PENDING_APPROVAL` 且停用備份；`false` 時初始化完成即 `APPROVED`／啟用 | 否 | 範例可、正式設定不提交 | `true` 時未核准帳號不可備份或綁定群組 |
+| `TEST_LINE_USER_HASH` | 僅供管理者手動 OAuth 刷新測試的 64 碼小寫 `lineUserHash`；不是原始 LINE userId | 敏感設定 | 否 | 格式錯誤、Users 不存在或未啟用時測試安全失敗 |
 
 `script-properties.example.json` 列出完整範例名稱，可用來逐項核對，但不可直接填入真實值後提交。`WORKER_GAS_SHARED_SECRET`、`BIND_TOKEN_SECRET` 與 `IDENTIFIER_HASH_SECRET` 必須三者不同。可用密碼管理器產生高熵值；不要把產生指令輸出貼入文件或終端紀錄截圖。
 
@@ -49,6 +51,8 @@
 `IDENTIFIER_HASH_SECRET` 是永久資料關聯的一部分。首次正式上線後不可直接更換；它同時影響 Users、Groups、Invitations、Nonces、BindingSessions、OAuth Service 名稱與 Drive `lineBackupEventKey`。若日後確實需要輪替，必須另行設計資料與 Token 遷移，不能只替換 Property。
 
 自助綁定啟用後，管理者可在私訊使用 `待審核`、`核准 <編號[,編號]>`、`拒絕 <編號[,編號]>`。`核准全部`／`拒絕全部` 會先產生 5 分鐘確認碼；只有同一管理者輸入對應的確認指令才會執行，確認碼消耗後不可重用。批次只處理 `PENDING_APPROVAL` 且 `Enabled=false` 的 Users。
+
+群組 owner／管理者可使用 `補備份 今日`、`補備份 2026-08` 或日期區間；私訊可使用 `群組補備份`，多個群組時附上 `g_xxxxxxxx` 安全代號。補備份只處理 Bot 已收到且仍有必要 metadata 的失敗／未完成工作，不是 LINE 歷史訊息查詢。首次啟用前，請把 Worker 部署網址加上 `/internal/replay` 填入 `WORKER_REPLAY_ENDPOINT`；此值不可填入聊天、Git 或公開文件，且不需要新增 Secret。
 
 使用者私訊 `紀錄` 或 `查詢紀錄` 可取得 10 分鐘查詢連結。查詢中心讀取自己的備份 Sheet；群組 owner 也只能從私訊查詢自己 Sheet 中的群組紀錄。群組內輸入查詢指令不會產生連結。若要手動驗證頁面，預期標題為「LINE 記錄搜尋中心」，可用日期、關鍵字與類型篩選，且不顯示 LINE userId、groupId 或 Google Email。
 
@@ -63,7 +67,7 @@
 
 本版新增或需特別核對的完整欄位順序：
 
-- Jobs：`WebhookEventId`、`MessageId`、`Status`、`RetryCount`、`LeaseExpiresAt`、`DriveFileId`、`ErrorCode`、`ErrorMessage`、`CreatedAt`、`UpdatedAt`。
+- Jobs：`WebhookEventId`、`MessageId`、`Status`、`RetryCount`、`LeaseExpiresAt`、`DriveFileId`、`ErrorCode`、`ErrorMessage`、`CreatedAt`、`UpdatedAt`，以及新版附加的 `MessageType`、`LineUserHash`、`GroupIdHash`、`OwnerLineUserHash`、`SourceType`、`OriginalFileName`、`LineMessageTime`、`SenderDisplayName`、`GroupDisplayName`。舊版 Jobs 只有前 10 欄時，程式會在最右側補欄，不會清除既有資料；OAuth 失效的附件會以 `OAUTH_REAUTH_REQUIRED` 保留必要 metadata 供重新授權後補備份。
 - BindingSessions：`SessionNonceHash`、`LineUserHash`、`InviteCodeHash`、`ExpiresAt`、`UsedAt`、`Status`、`CreatedAt`、`UpdatedAt`、`FailureCode`。
 - Users：`LineUserHash`、`GoogleSubjectId`、`GoogleEmail`、`RootFolderId`、`PersonalFolderId`、`GroupFolderId`、`SheetId`、`Enabled`、`CreatedAt`、`UpdatedAt`、`ApprovalStatus`。
 
@@ -121,3 +125,39 @@ Apps Script Properties 有單一值與總容量限制。OAuth2 Library 會把每
 每次 `clasp push --force` 並將既有 GAS Web App 更新到新版本後，管理者必須先在 Apps Script 編輯器手動執行全域函式 `testOwnerAuthorizationHealth`。若畫面出現 Google Review Permissions，完成授權後再次執行，Logger 應顯示 `PASS testOwnerAuthorizationHealth`。接著私訊 Bot 測試 `說明`，再到已綁定群組測試 `說明` 與 `備份清單`；預期群組只有摘要，不會公開 Drive 或查詢中心連結。
 
 群組完整查詢使用 `群組紀錄 YYYY-MM`，多個群組時再附 `g_xxxxxxxx` 安全代號。Bot 回覆的是 GAS `/exec?route=q&id={shortCode}` 的 10 分鐘短連結，不包含長 Token；此流程沿用既有 `drive.file` scope，不新增 OAuth scope。舊列缺少「群組識別」時，符合唯一名稱條件才會相容查詢；管理者可手動執行 `migrateLegacyGroupRecordHashes()` 補齊。
+
+## Google OAuth App 發布到 Production
+
+Google Cloud OAuth App 若維持 Testing，且使用 `drive.file` 等非 `openid`／`email`／`profile` 的 scope，使用者的 Refresh Token 可能受到測試期限制而週期性失效。這不是 LINE、Queue 或 Drive 資料被刪除；只是需要重新取得授權 Token。
+
+管理者請在 Google Cloud Console 手動完成以下步驟，本專案不會自動修改 Google Cloud 設定：
+
+1. 進入 Google Cloud Console，選擇目前專案 `LINE Google Drive Backup Test`，或實際使用的 Google Cloud 專案。
+2. 進入「Google Auth Platform」→「OAuth consent screen」。若介面仍顯示舊名稱，請進入「APIs & Services」→「OAuth consent screen」。
+3. 確認 Publishing status 目前是否為 `Testing`。
+4. 檢查 App name、User support email、Developer contact information 與 Authorized domains。
+5. 檢查 OAuth scopes 至少包含：
+   - `openid`
+   - `email`
+   - `profile`
+   - `https://www.googleapis.com/auth/drive.file`
+6. 確認沒有誤加入完整 `https://www.googleapis.com/auth/drive` scope；本專案只使用 `drive.file`。
+7. 依 Google Cloud Console 顯示的檢查項目完成 App 設定後，選擇「Publish App」將 Publishing status 改為 `Production`。若 Google 要求驗證，依畫面完成，不要用規避方式跳過驗證。
+8. 發布後，已經因 Testing 失效的既有使用者仍要在 LINE 私訊輸入 `重新授權` 一次。重新授權會沿用同一 `LineUser_<lineUserHash>` OAuth Service，只更新 OAuth Token，不刪除 Users、Drive、Sheet、群組或備份紀錄。
+9. 管理者先用既有帳號測試 `狀態`、`容量`、`紀錄` 與一個小檔案，再讓新使用者測試 `綁定`、文字與檔案備份。
+
+### 發布後固定檢查
+
+在 GAS 更新後，先於 Apps Script 編輯器執行 `testOAuthProductionReadinessChecklist`，依 Logger checklist 確認 scope 與文件提醒；再執行 `testOwnerAuthorizationHealth`。若出現 Review Permissions，完成授權後確認 Logger 有 `PASS testOwnerAuthorizationHealth`，最後測試 LINE `說明`。
+
+## OAuth Token 自動刷新手動測試
+
+Production 發布後，管理者可使用既有使用者的 64 碼小寫 `lineUserHash` 作為測試對象。於 Apps Script「專案設定 → 指令碼屬性」新增 `TEST_LINE_USER_HASH`，值只填入安全雜湊，不要填入原始 LINE userId、Token 或 Email。
+
+1. 先執行 `testOwnerAuthorizationHealth`；若出現 Review Permissions，完成擁有者授權後確認 Logger 顯示 `PASS testOwnerAuthorizationHealth`。
+2. 執行全域函式 `testOAuthRefreshForConfiguredUser`。它會查詢 Users、確認 `Enabled=true` 且狀態為 `APPROVED`（舊版空白狀態會相容視為 APPROVED），使用正式 `LineUser_<lineUserHash>` Service，讀取不含 Token 值的 metadata，呼叫 `hasAccess()`、`getAccessToken()`，再沿用容量查詢的 Drive `about.get` helper。
+3. 預期成功時 Logger 顯示 `PASS testOAuthRefreshForConfiguredUser`。失敗時只會顯示 `component=oauth-refresh-test`、錯誤碼、Google reason（若有）、HTTP status、Token 是否存在的布林值、雜湊前綴與 correlationId。
+4. 需要主動測試 Refresh Token 時，偶爾執行 `testOAuthForceRefreshForConfiguredUser`。此函式只呼叫同一 Service 的 `refresh()`，接著再次呼叫 `about.get`；成功時顯示 `PASS testOAuthForceRefreshForConfiguredUser`。不要頻繁執行，也不要在一般 LINE 指令呼叫。
+5. 測試不會由本專案直接寫入或 reset Token，也不會刪除 Users／Drive／Sheet／Groups、重建資料夾或修改設定；OAuth2 Library 依 `hasAccess()`／`refresh()` 的正常流程可能更新授權 Token。測試完成後可刪除 `TEST_LINE_USER_HASH`，避免誤用測試對象。
+
+Google OAuth App 已在 Production 時，新授權通常不再受到 Testing 模式的 7 天限制；但使用者撤銷授權、長期未使用、Refresh Token 數量超限或 Google Workspace 政策仍可能使 Token 失效。若測試確認失效，請讓該使用者在 LINE 私訊輸入 `重新授權`；這只更新同一 OAuth Service 的 Token，不刪除既有 Users、Drive、Sheet 或 Groups。

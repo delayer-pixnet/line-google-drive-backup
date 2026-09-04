@@ -57,8 +57,12 @@ function getOwnedGroupDriveQuotaReply_(lineUserHash) {
 }
 
 function getDriveQuotaAccessToken_(lineUserHash, state, correlationId) {
+  if (!state || !state.hasUser) {
+    logDriveQuotaUserState_(state, correlationId, false, 'OAUTH_NOT_BOUND');
+    throw createAppError_('OAUTH_NOT_BOUND', false, getOAuthNotBoundMessage_());
+  }
   var hasApprovedAccess = Boolean(
-    state && state.hasUser && state.enabled &&
+    state.enabled &&
     state.approvalStatus === USER_APPROVAL_STATUS_.APPROVED
   );
   if (!hasApprovedAccess) {
@@ -74,7 +78,7 @@ function getDriveQuotaAccessToken_(lineUserHash, state, correlationId) {
       var tokenError = createAppError_(
         'OAUTH_TOKEN_MISSING',
         false,
-        'Google 授權已失效，請重新輸入「綁定」完成授權。'
+        getOAuthTokenExpiredMessage_()
       );
       tokenError.correlationId = correlationId;
       logDriveQuotaUserState_(state, correlationId, false, tokenError.appCode);
@@ -311,11 +315,14 @@ function handleDriveQuotaError_(error, state, correlationId) {
 }
 
 function getDriveQuotaUserMessage_(appError) {
-  if (appError && ['OAUTH_NOT_BOUND', 'DRIVE_QUOTA_USER_NOT_ENABLED'].indexOf(appError.appCode) >= 0) {
+  if (appError && appError.appCode === 'OAUTH_NOT_BOUND') {
+    return getOAuthNotBoundMessage_();
+  }
+  if (appError && appError.appCode === 'DRIVE_QUOTA_USER_NOT_ENABLED') {
     return '請先完成 Google 帳號綁定後再查詢容量。';
   }
   if (appError && ['OAUTH_TOKEN_MISSING', 'OAUTH_TOKEN_READ_FAILED'].indexOf(appError.appCode) >= 0) {
-    return 'Google 授權已失效，請重新輸入「綁定」完成授權。';
+    return getOAuthTokenExpiredMessage_();
   }
   if (appError && appError.httpStatus === 403 && appError.googleReason === 'insufficientPermissions') {
     return '目前 Google Drive 授權不足，請重新輸入「綁定」完成授權。';

@@ -58,10 +58,14 @@ Worker 與 GAS 都以不因第一個不相符字元而提前返回的比較函�
 ## 最小權限與 Token
 
 - Google 朋友授權：`openid email profile drive.file`。
+- Google Cloud OAuth App 若維持 Testing，且使用 `drive.file` 等非基本身分 scope，Refresh Token 可能受測試期限制而週期性失效。長期使用前應由管理者在 Google Auth Platform 將 App 發布到 Production；本專案不會自動修改 Publishing status，也不會讀取或輸出 Client Secret。
+- Production 發布後，已經失效的使用者仍需私訊輸入 `重新授權` 一次。重新授權只更新同一 `LineUser_<lineUserHash>` Service 的 OAuth Token，不刪除 Users、Drive、Sheet、群組或備份紀錄。
+- Token 失效與未綁定是不同狀態：已有 Users 記錄但 OAuth Service 無可用 Token 時只回覆重新授權提示；完全沒有 Users 記錄時才回覆綁定提示，避免把可恢復帳號誤判為未綁定。
 - LINE Channel Access Token 只在 Cloudflare Secret 與 GAS Script Properties 各存一份，供回覆與下載 Content。
 - Apps Script OAuth2 Library 的 Script Properties 以 `LineUser_<64 位雜湊>` 分隔服務名稱；解除綁定呼叫 `reset()`。
 - 容量、紀錄、個人備份、群組綁定與 Drive 初始化都只能透過共用 `getUserAccessToken_()` 讀取上述 Service。`重新授權` 只允許既有 Users 使用者取得新 Token，callback 會拒絕不同 Google Subject，並重用既有資源。
 - 不把 Token 物件、Authorization header、原始 API body 或訊息文字傳給 `safeLog_`。
+- 管理者手動測試 `testOAuthRefreshForConfiguredUser` 與 `testOAuthForceRefreshForConfiguredUser` 只使用 `TEST_LINE_USER_HASH` 對應的正式 `LineUser_<lineUserHash>` Service；Logger 僅輸出 `hasToken`、`hasRefreshToken`、`hasAccessToken`、`hasAccess`、有限的期限數字、錯誤碼、Google reason、HTTP status、雜湊前綴與 correlationId。測試不會輸出或由本專案直接寫入／reset Access／Refresh Token，也不會重建任何資料；OAuth2 Library 依正常刷新流程可能持久化新的授權 Token。
 
 ## 外部輸入限制
 
@@ -88,6 +92,14 @@ Worker Log 只允許 `component`、`status`、`correlationId` 與 `errorCode`。
 - 管理者可手動執行 `cleanupExpiredAdminRecords`，刪除過期 Nonces、已過期的 PENDING／COMPLETED BindingSessions、超過保留天數的 Errors，以及超過保留天數且狀態為 COMPLETED 的 Jobs。可恢復的 AUTHORIZED／PROVISIONING／FAILED Session 與 PROCESSING Job 不會被刪除；函式也不刪除 Users、Groups、Invitations 或任何使用者 Drive 檔案。
 - `ERROR_RETENTION_DAYS` 與 `COMPLETED_JOB_RETENTION_DAYS` 控制保留天數；預設分別為 30 天與 90 天。
 
+## OAuth Token 失效與待補備份
+
+- `OAuth2 Service.hasAccess()` 失敗、Token 讀取失敗，以及 Drive／Sheets API 回傳 401 或 403 `insufficientPermissions` 都視為需重新授權；不會把已有 Users 的帳號誤判為尚未綁定。
+- 備份工作先保存訊息型別、檔名、時間、來源與 HMAC hash metadata，狀態改為 `OAUTH_REAUTH_REQUIRED`；`ErrorCode` 保存受限的 retry reason（例如 `OAUTH_REAUTH_REQUIRED` 或 `GROUP_OWNER_OAUTH_REAUTH_REQUIRED`），並保留既有 `DriveFileId`。GAS 回應安全的重新授權提示，Worker 回覆後 ACK 協調結果，不重新上傳或使用 Push API。
+- 個人每次失效工作都可提示；群組提示使用 `groupIdHash + errorCode` 的不可逆快取鍵，30 分鐘內最多提醒一次，避免成員大量附件造成洗版。提醒只顯示 owner 需重新授權，不顯示 owner 身分資料。
+- 重新授權只更新同一使用者的 OAuth Token，不刪除 Users、Groups、Drive 資料夾或備份 Sheet。完成後可用 `補備份 今日`（私人附件）或 `群組補備份`（群組附件）重送仍有 messageId 且 LINE Content API 可取得的項目。
+- 管理 Jobs 不保存未成功寫入使用者 Sheet 的完整文字內容；因此沒有可重建原文的私人文字／`#筆記` 工作會安全略過。這不會擴大資料保存範圍，也不代表可以抓取 LINE 歷史紀錄。
+
 ## Secret 輪替
 
 1. LINE Channel Secret：先更新 LINE 與 Worker，切換期間 webhook 會驗證失敗；安排短維護窗。
@@ -102,3 +114,10 @@ Worker Log 只允許 `component`、`status`、`correlationId` 與 `errorCode`。
 - 「群組識別」只保存 `groupId` 的 HMAC 雜湊；舊 Sheet 缺欄或舊列空白時不重排、不清空，查詢只在 owner／管理者、owner Sheet、來源為 group、群組名稱唯一一致等條件成立時 fallback，否則提示只能查詢新紀錄。`migrateLegacyGroupRecordHashes()` 只補唯一可判斷的舊列。
 - 群組摘要最多回覆最新 5 筆，移除 Drive URL、File ID、messageId、webhookEventId、raw LINE identifier。完整群組查詢 Token 為版本 2，綁定要求者雜湊、群組雜湊、期限與 nonce；Script Properties 只保存 Token HMAC 雜湊。
 - `searchRecords` 重新驗證群組 owner／管理者範圍，並以 owner 的 OAuth Service 讀取 owner Sheet；即使管理者取得連結，也不會把 owner 的 Token 或 Email 傳給頁面。
+
+## 群組補備份安全邊界
+
+- `補備份` 只允許群組 owner 或 `ADMIN_LINE_USER_HASHES` 管理者；私訊 `群組補備份` 也會依 owner／管理者可操作群組範圍驗證。一般成員只能提供新的附件或 `#筆記`，不能觸發重放。
+- GAS 不接受使用者提供的 raw LINE 識別或檔案內容；候選資料只來自 owner 自己的備份 Sheet、Jobs 與已保存的安全識別。`ReplayRequests` 只保存原事件／訊息識別、執行者雜湊與狀態，Log 不輸出原始文字或完整檔案識別。
+- GAS 對 Worker `/internal/replay` 使用既有 `WORKER_GAS_SHARED_SECRET` 的 `timestamp.nonce.payload` HMAC；Worker 只接受受限欄位、短字串、雜湊格式與最多 100 筆 Queue 工作。Queue 後續仍使用 Jobs 租約與 Drive `lineBackupEventKey` 去重。
+- 補備份不代表 LINE 歷史抓取。沒有 messageId、LINE Content API 已不可下載、已完成／明確拒絕或舊群組名稱無法唯一對應的資料會略過；不會因為重試而擴大存取範圍。

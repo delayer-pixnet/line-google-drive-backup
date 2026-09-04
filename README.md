@@ -20,15 +20,23 @@
 - 備份紀錄會保存清理後的「傳送者名稱」與安全化「傳送者識別」；LINE Profile 失敗時使用 hash 前綴 fallback，不會中斷備份。
 - 群組：任一成員的附件與 `#筆記` 進入群組擁有者的 Drive／Sheet；一般文字只在提及 Bot、使用 `#筆記` 或指定指令時處理。群組管理與個人綁定指令受 owner／管理者及私訊限制。
 - 群組清單：群組內可用 `備份清單`、`今日備份清單`、`本週備份清單`、`N月備份清單` 或 `YYYY-MM 備份清單` 查詢摘要；owner／管理者私訊 `群組紀錄 YYYY-MM g_xxxxxxxx` 取得 10 分鐘有效短查詢連結。舊群組紀錄缺少識別時，僅在名稱唯一且由 owner／管理者查詢時相容 fallback。
+- 群組補備份：群組 owner／管理者可用 `補備份 今日`、`補備份 YYYY-MM` 或日期區間重新排入已收到但失敗／未完成的工作；私訊可用 `群組補備份` 加日期與安全群組代號。此功能只重試系統曾收到的 webhook，不會抓取 LINE 歷史訊息。
+- OAuth 授權失效時不會靜默丟棄附件：個人會立即收到重新授權提示，群組則由 30 分鐘冷卻提醒群組 owner；事件 metadata 會保留在 Jobs，重新授權後可用 `補備份 今日` 嘗試補回可取得的附件。無法取得 LINE Content 或未保存原文的項目仍可能略過。
 - 指令：`綁定`（自助申請）、`綁定 <邀請碼>`、`重新授權`（更新既有 OAuth Token、不重建 Drive／Sheet）、`狀態`、`容量／空間／Drive容量`、`群組容量`、`紀錄／查詢紀錄`、`解除綁定`、`綁定群組`、`解除群組`、`#筆記 <內容>`、`說明`；管理者另有 `待審核`、`核准／拒絕 <編號[,編號]>`、`核准／拒絕 全部`（需二次確認）。
 - 自助綁定：`REQUIRE_ADMIN_APPROVAL=true` 時等待管理者核准；設為 `false` 時 OAuth 與 Drive 初始化完成即自動核准並啟用備份。
 - `紀錄` 查詢中心只在私訊產生 10 分鐘短效連結，資料限制在目前使用者自己的備份 Sheet；群組成員不能在群組中開啟完整紀錄。
 - 防護：LINE 原始 Body 簽章、Worker→GAS HMAC、防重播、工作租約、Drive `appProperties` 冪等、邀請碼雜湊與短效綁定 Token。
 - 金鑰分工：`IDENTIFIER_HASH_SECRET` 只建立長期識別雜湊；`BIND_TOKEN_SECRET` 只簽署短效綁定 Token；`WORKER_GAS_SHARED_SECRET` 只驗證 Worker→GAS envelope。首次上線後不可直接輪替 `IDENTIFIER_HASH_SECRET`。
+- Google OAuth App 若仍為 Testing，含 `drive.file` 等非基本身分 scope 時，Refresh Token 可能受測試期限制而週期性失效。提供朋友長期使用前，管理者應依 [OAuth Production 發布步驟](docs/GOOGLE_APPS_SCRIPT_SETUP.md#google-oauth-app-發布到-production) 將 App 發布到 Production；已失效帳號仍需私訊輸入 `重新授權` 一次，這只更新 Token，不刪除 Users、Drive、Sheet 或群組資料。
+- OAuth App 發布到 Production 後，可由管理者在 Apps Script 設定 `TEST_LINE_USER_HASH`（64 碼小寫雜湊）並手動執行 `testOAuthRefreshForConfiguredUser`，確認既有 OAuth Service 的 Token 可自動取得及呼叫 Drive `about.get`；需要主動驗證 Refresh Token 時，偶爾執行 `testOAuthForceRefreshForConfiguredUser`。這兩個測試不會由本專案直接寫入或 reset Token，也不會修改資料；OAuth2 Library 依 `hasAccess()`／`refresh()` 的正常流程可能更新授權 Token。
 - 預設單檔上限為 20 MiB；45 MiB 屬 Apps Script 高風險設定且不保證成功。
 - 附件只在 GAS 執行期間存在記憶體，不永久保存在 Cloudflare 或管理者的 Drive。
 
 所有指令都經 Cloudflare Queue 處理，因此 LINE Reply Token 可能在回覆前過期。可選的 Push fallback 預設關閉，且只在 LINE 明確回覆 Reply Token 無效時使用；備份結果應以 Drive、Sheet 與 Jobs 狀態為準。
+
+私訊輸入 `狀態` 會顯示個人綁定、OAuth `hasAccess()` 狀態、短效 Access Token 剩餘時間（可取得時）、Refresh Token 是否存在、最後檢查時間，以及最多 10 個管理中群組名稱。群組內的 `狀態` 仍只顯示該群組是否已綁定，不會公開個人授權資訊。
+
+私訊輸入 `系統狀態` 或 `系統診斷` 可由 Worker 直接回覆 Worker、Queue 與最近 GAS 呼叫狀態，即使 GAS Web App 暫時回 HTTP 403 HTML 也能取得基本診斷。若 GAS 403 HTML 導致一般工作無法執行，Worker 會以 Reply API 提醒管理者執行 `testOwnerAuthorizationHealth`；Reply 失敗只記錄安全錯誤，不會重做備份或改用 Push。
 
 ## 專案目錄
 
